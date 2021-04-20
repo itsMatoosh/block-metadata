@@ -12,7 +12,6 @@ repositories {
         // As of Gradle 5.1, you can limit this to only those
         // dependencies you expect from it
         content {
-            includeGroup 'org.bukkit'
             includeGroup 'org.spigotmc'
         }
     }
@@ -27,5 +26,6 @@ dependencies {
     // spigot
     compileOnly 'org.spigotmc:spigot-api:1.16.5-R0.1-SNAPSHOT'
 
+    // junit
     testCompile group: 'junit', name: 'junit', version: '4.12'
 }

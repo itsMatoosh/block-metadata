@@ -6,9 +6,26 @@ group 'me.matoosh'
 version '1.0'
 
 repositories {
+    maven {
+        url = 'https://hub.spigotmc.org/nexus/content/repositories/snapshots/'
+
+        // As of Gradle 5.1, you can limit this to only those
+        // dependencies you expect from it
+        content {
+            includeGroup 'org.bukkit'
+            includeGroup 'org.spigotmc'
+        }
+    }
     mavenCentral()
 }
 
 dependencies {
+    // jackson
+    implementation group: 'com.fasterxml.jackson.dataformat', name: 'jackson-dataformat-yaml', version: '2.12.3'
+    implementation group: 'com.fasterxml.jackson.core', name: 'jackson-databind', version: '2.12.3'
+
+    // spigot
+    compileOnly 'org.spigotmc:spigot-api:1.16.5-R0.1-SNAPSHOT'
+
     testCompile group: 'junit', name: 'junit', version: '4.12'
 }

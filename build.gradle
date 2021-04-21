@@ -27,7 +27,7 @@ dependencies {
     compileOnly 'org.spigotmc:spigot-api:1.16.5-R0.1-SNAPSHOT'
 
     // junit
-    testCompile ('org.junit.jupiter:junit-jupiter:5.8.0-M1')
+    testCompile 'org.junit.jupiter:junit-jupiter:5.7.1'
 
     // mock bukkit
     implementation 'com.github.seeseemelk:MockBukkit:v1.16-SNAPSHOT'

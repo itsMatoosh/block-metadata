@@ -88,6 +88,7 @@ public class BlockMetadataStorage<T extends Serializable> {
      * @return Current metadata of the block. Null if no data stored.
      * @throws ChunkBusyException Thrown if the chunk is busy.
      * @throws ChunkNotLoadedException Thrown if the chunk is not loaded.
+     * @return The fetched metadata value.
      */
     public T getMetadata(Block block)
             throws ChunkBusyException, ChunkNotLoadedException {
@@ -127,28 +128,31 @@ public class BlockMetadataStorage<T extends Serializable> {
      * @param block The block.
      * @throws ChunkBusyException Thrown if the chunk is busy.
      * @throws ChunkNotLoadedException Thrown if the chunk is not loaded.
+     * @return The removed metadata value. Null if no value was stored.
      */
-    public void removeMetadata(Block block)
+    public T removeMetadata(Block block)
             throws ChunkBusyException, ChunkNotLoadedException {
         // cache chunk
         Chunk chunk = block.getChunk();
 
         // check if there are durabilities in the chunk
         if (!hasMetadataForChunk(chunk)) {
-            return;
+            return null;
         }
 
         // get chunk
         Map<String, T> metadata = modifyMetadataInChunk(chunk);
 
         // remove from map
-        metadata.remove(getBlockKeyInChunk(block));
+        T value = metadata.remove(getBlockKeyInChunk(block));
 
         // check if last value
         if (metadata.size() < 1) {
             // remove chunk from storage
             removeMetadataForChunk(chunk);
         }
+
+        return value;
     }
 
     /**

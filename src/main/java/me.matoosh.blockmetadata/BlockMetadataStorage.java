@@ -10,6 +10,7 @@ import me.matoosh.blockmetadata.exception.ChunkBusyException;
 import me.matoosh.blockmetadata.exception.ChunkNotLoadedException;
 import org.bukkit.Bukkit;
 import org.bukkit.Chunk;
+import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.plugin.java.JavaPlugin;
 
@@ -18,11 +19,14 @@ import java.io.Serializable;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
 
 /**
  * Service managing the storage of block metadata.
@@ -379,6 +383,20 @@ public class BlockMetadataStorage<T extends Serializable> {
     }
 
     /**
+     * Persists metadata of specified chunks on disk.
+     * @param chunks Chunks to persist metadata for.
+     * @param unload Whether the chunks should be unloaded from memory.
+     */
+    public CompletableFuture<Void> persistChunks(boolean unload, Chunk... chunks)
+            throws ChunkNotLoadedException {
+        CompletableFuture<Void>[] tasks = new CompletableFuture[chunks.length];
+        for (int i = 0; i < chunks.length; i++) {
+            tasks[i] = persistChunk(chunks[i], unload);
+        }
+        return CompletableFuture.allOf(tasks);
+    }
+
+    /**
      * Persists chunk metadata on disk.
      * @param chunk The chunk to persist.
      * @param unload Whether the chunk should be unloaded from memory.
@@ -473,6 +491,19 @@ public class BlockMetadataStorage<T extends Serializable> {
                 }
                 throw new CompletionException(e);
             });
+    }
+
+    /**
+     * Loads chunk metadata for each specified chunk.
+     * @param chunks Chunks to load metadata for.
+     */
+    public CompletableFuture<Void> loadChunks(Chunk... chunks)
+            throws ChunkAlreadyLoadedException {
+        CompletableFuture<Void>[] tasks = new CompletableFuture[chunks.length];
+        for (int i = 0; i < chunks.length; i++) {
+            tasks[i] = loadChunk(chunks[i]);
+        }
+        return CompletableFuture.allOf(tasks);
     }
 
     /**

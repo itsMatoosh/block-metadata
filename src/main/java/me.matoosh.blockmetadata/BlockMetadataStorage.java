@@ -6,19 +6,19 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import me.matoosh.blockmetadata.async.AsyncFiles;
 import me.matoosh.blockmetadata.exception.ChunkBusyException;
+import me.matoosh.blockmetadata.exception.ChunkNotLoadedException;
 import org.bukkit.Bukkit;
 import org.bukkit.Chunk;
 import org.bukkit.block.Block;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.io.IOException;
+import java.io.Serializable;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -27,7 +27,7 @@ import java.util.concurrent.CompletionException;
  * Service managing the storage of block metadata.
  * @param <T> The type of metadata to store.
  */
-public class BlockMetadataStorage<T> {
+public class BlockMetadataStorage<T extends Serializable> {
 
     /**
      * Path of the data folder.
@@ -45,14 +45,9 @@ public class BlockMetadataStorage<T> {
     private final Map<Path, RegionTask> busyRegions = new HashMap<>();
 
     /**
-     * Chunks that are currently being loaded/persisted.
+     * Chunks that are currently loaded.
      */
-    private final Set<Chunk> busyChunks = new HashSet<>();
-
-    /**
-     * Chunks which have had their metadata modified since they were loaded.
-     */
-    private final Set<Chunk> dirtyChunks = new HashSet<>();
+    private final Map<Chunk, LoadedChunkData> loadedChunks = new HashMap<>();
 
     /**
      * YAML data file mapper.
@@ -90,8 +85,11 @@ public class BlockMetadataStorage<T> {
      * Get metadata of a block.
      * @param block The block.
      * @return Current metadata of the block. Null if no data stored.
+     * @throws ChunkBusyException Thrown if the chunk is busy.
+     * @throws ChunkNotLoadedException Thrown if the chunk is not loaded.
      */
-    public T getMetadata(Block block) throws ChunkBusyException {
+    public T getMetadata(Block block)
+            throws ChunkBusyException, ChunkNotLoadedException {
         if (block == null) return null;
 
         // get chunk
@@ -109,16 +107,22 @@ public class BlockMetadataStorage<T> {
      * Set metadata of a block.
      * @param block The block.
      * @param metadata Metadata to set to the block.
+     * @throws ChunkBusyException Thrown if the chunk is busy.
+     * @throws ChunkNotLoadedException Thrown if the chunk is not loaded.
      */
-    public void setMetadata(Block block, T metadata) throws ChunkBusyException {
+    public void setMetadata(Block block, T metadata)
+            throws ChunkBusyException, ChunkNotLoadedException {
         modifyMetadataInChunk(block.getChunk()).put(getBlockKeyInChunk(block), metadata);
     }
 
     /**
      * Removes metadata for a block.
      * @param block The block.
+     * @throws ChunkBusyException Thrown if the chunk is busy.
+     * @throws ChunkNotLoadedException Thrown if the chunk is not loaded.
      */
-    public void removeMetadata(Block block) throws ChunkBusyException {
+    public void removeMetadata(Block block)
+            throws ChunkBusyException, ChunkNotLoadedException {
         // cache chunk
         Chunk chunk = block.getChunk();
 
@@ -144,24 +148,27 @@ public class BlockMetadataStorage<T> {
      * Checks whether there are metadata stored for a given chunk.
      * @param chunk The chunk to check.
      * @return Whether there are metadata stored for the given chunk.
-     * @throws ChunkBusyException thrown if the chunk is busy.
+     * @throws ChunkBusyException Thrown if the chunk is busy.
+     * @throws ChunkNotLoadedException Thrown if the chunk is not loaded.
      */
     public boolean hasMetadataForChunk(Chunk chunk)
-            throws ChunkBusyException {
-        if (isChunkBusy(chunk)) throw new ChunkBusyException();
+            throws ChunkBusyException, ChunkNotLoadedException {
+        ensureChunkReady(chunk);
         return metadata.containsKey(chunk);
     }
 
     /**
      * Removes all metadata stored for a given chunk.
      * @param chunk The chunk to remove metadata from.
-     * @throws ChunkBusyException thrown if the chunk is busy.
+     * @throws ChunkBusyException Thrown if the chunk is busy.
+     * @throws ChunkNotLoadedException Thrown if the chunk is not loaded.
      */
     public void removeMetadataForChunk(Chunk chunk)
-            throws ChunkBusyException {
-        if (isChunkBusy(chunk)) throw new ChunkBusyException();
+            throws ChunkBusyException, ChunkNotLoadedException {
+        ensureChunkReady(chunk);
         metadata.remove(chunk);
-        dirtyChunks.add(chunk);
+        LoadedChunkData loadedChunkData = loadedChunks.get(chunk);
+        loadedChunkData.setDirty(true);
     }
 
     /**
@@ -169,13 +176,15 @@ public class BlockMetadataStorage<T> {
      * Sets the chunk as dirty.
      * @param chunk The chunk in which the metadata are.
      * @return Map of metadata.
-     * @throws ChunkBusyException thrown if the chunk is busy.
+     * @throws ChunkBusyException Thrown if the chunk is busy.
+     * @throws ChunkNotLoadedException Thrown if the chunk is not loaded.
      */
     public Map<String, T> modifyMetadataInChunk(Chunk chunk)
-            throws ChunkBusyException {
-        if (isChunkBusy(chunk)) throw new ChunkBusyException();
+            throws ChunkBusyException, ChunkNotLoadedException {
+        ensureChunkReady(chunk);
         Map<String, T> data = metadata.computeIfAbsent(chunk, k -> new HashMap<>());
-        dirtyChunks.add(chunk);
+        LoadedChunkData loadedChunkData = loadedChunks.get(chunk);
+        loadedChunkData.setDirty(true);
         return data;
     }
 
@@ -183,11 +192,12 @@ public class BlockMetadataStorage<T> {
      * Gets metadata of blocks in a chunk.
      * @param chunk The chunk in which the metadata are.
      * @return Map of metadata.
-     * @throws ChunkBusyException thrown if the chunk is busy.
+     * @throws ChunkBusyException Thrown if the chunk is busy.
+     * @throws ChunkNotLoadedException Thrown if the chunk is not loaded.
      */
     public Map<String, T> getMetadataInChunk(Chunk chunk)
-            throws ChunkBusyException {
-        if (isChunkBusy(chunk)) throw new ChunkBusyException();
+            throws ChunkBusyException, ChunkNotLoadedException {
+        ensureChunkReady(chunk);
         return metadata.get(chunk);
     }
 
@@ -361,10 +371,12 @@ public class BlockMetadataStorage<T> {
      * Persists chunk metadata on disk.
      * @param chunk The chunk to persist.
      * @param unload Whether the chunk should be unloaded from memory.
+     * @throws ChunkNotLoadedException Thrown if the chunk isn't loaded.
      */
-    public CompletableFuture<Void> persistChunk(Chunk chunk, boolean unload) {
+    public CompletableFuture<Void> persistChunk(Chunk chunk, boolean unload)
+            throws ChunkNotLoadedException {
         // check if chunk dirty
-        if (!dirtyChunks.contains(chunk)) {
+        if (!isChunkDirty(chunk)) {
             return CompletableFuture.completedFuture(null);
         }
         // save chunk asynchronously
@@ -379,7 +391,8 @@ public class BlockMetadataStorage<T> {
     private CompletableFuture<Void> persistChunkAsync(Chunk chunk, boolean unload) {
         return CompletableFuture.supplyAsync(() -> {
             // set busy
-            busyChunks.add(chunk);
+            LoadedChunkData loadedChunkData = loadedChunks.get(chunk);
+            loadedChunkData.setBusy(true);
 
             // get appropriate file
             return getRegionFile(chunk);
@@ -426,10 +439,13 @@ public class BlockMetadataStorage<T> {
             })
             .thenCompose((data) -> bufferRegionData(getRegionFile(chunk), data))
             .thenRun(() -> {
-                // not busy
-                busyChunks.remove(chunk);
-                // no dirty
-                dirtyChunks.remove(chunk);
+                if (unload) {
+                    loadedChunks.remove(chunk);
+                } else {
+                    LoadedChunkData loadedChunkData = loadedChunks.get(chunk);
+                    loadedChunkData.setBusy(false);
+                    loadedChunkData.setDirty(false);
+                }
             });
     }
 
@@ -449,7 +465,9 @@ public class BlockMetadataStorage<T> {
     private CompletableFuture<Void> loadChunkAsync(Chunk chunk) {
         return CompletableFuture.supplyAsync(() ->{
             // set busy
-            busyChunks.add(chunk);
+            LoadedChunkData chunkData = new LoadedChunkData();
+            chunkData.setBusy(true);
+            loadedChunks.put(chunk, chunkData);
 
             // get appropriate file
             return getRegionFile(chunk);
@@ -463,8 +481,10 @@ public class BlockMetadataStorage<T> {
                 })
                 .thenAccept((data) -> {
                     // check if load was successful
+                    LoadedChunkData loadedChunkData = loadedChunks.get(chunk);
                     if (data == null) {
-                        busyChunks.remove(chunk);
+                        // no data for this chunk
+                        loadedChunkData.setBusy(false);
                         return;
                     }
 
@@ -476,7 +496,7 @@ public class BlockMetadataStorage<T> {
                     }
 
                     // not busy
-                    busyChunks.remove(chunk);
+                    loadedChunkData.setBusy(false);
                 });
     }
 
@@ -499,13 +519,55 @@ public class BlockMetadataStorage<T> {
     }
 
     /**
+     * Ensures that a chunk is ready. Throws exceptions in other case.
+     * @param chunk The chunk.
+     * @throws ChunkNotLoadedException Thrown if the chunk is not loaded.
+     * @throws ChunkBusyException Thrown if the chunk is busy.
+     */
+    public void ensureChunkReady(Chunk chunk)
+            throws ChunkNotLoadedException, ChunkBusyException {
+        boolean busy = isChunkBusy(chunk);
+        if (busy) {
+            throw new ChunkBusyException();
+        }
+    }
+
+    /**
      * Checks whether the specified chunk is busy.
      * A chunk is busy if it's being loaded/unloaded.
      * @param chunk The chunk.
      * @return Whether the chunk is busy.
      */
-    public boolean isChunkBusy(Chunk chunk) {
-        return busyChunks.contains(chunk);
+    public boolean isChunkBusy(Chunk chunk) throws ChunkNotLoadedException {
+        LoadedChunkData loadedChunkData = loadedChunks.get(chunk);
+        if (loadedChunkData == null) {
+            throw new ChunkNotLoadedException();
+        }
+        return loadedChunkData.isBusy();
+    }
+
+    /**
+     * Checks whether the specified chunk is dirty.
+     * A chunk is dirty if it has been modified since is was loaded into memory.
+     * @param chunk The chunk.
+     * @return Whether the chunk is dirty.
+     */
+    public boolean isChunkDirty(Chunk chunk) throws ChunkNotLoadedException {
+        LoadedChunkData loadedChunkData = loadedChunks.get(chunk);
+        if (loadedChunkData == null) {
+            throw new ChunkNotLoadedException();
+        }
+        return loadedChunkData.isDirty();
+    }
+
+    /**
+     * Checks whether the specified chunk is loaded.
+     * @param chunk The chunk.
+     * @return Whether the chunk is loaded.
+     */
+    public boolean isChunkLoaded(Chunk chunk) {
+        LoadedChunkData loadedChunkData = loadedChunks.get(chunk);
+        return loadedChunkData != null;
     }
 
     /**
@@ -615,6 +677,30 @@ public class BlockMetadataStorage<T> {
 
         public void setCleanupTask(CompletableFuture<Boolean> cleanupTask) {
             this.cleanupTask = cleanupTask;
+        }
+    }
+
+    /**
+     * Information about a loaded chunk
+     */
+    public static class LoadedChunkData {
+        private boolean dirty;
+        private boolean busy;
+
+        public boolean isDirty() {
+            return dirty;
+        }
+
+        public void setDirty(boolean dirty) {
+            this.dirty = dirty;
+        }
+
+        public boolean isBusy() {
+            return busy;
+        }
+
+        public void setBusy(boolean busy) {
+            this.busy = busy;
         }
     }
 }

@@ -1,5 +1,6 @@
 package me.matoosh.blockmetadata;
 
+import me.matoosh.blockmetadata.exception.ChunkAlreadyLoadedException;
 import me.matoosh.blockmetadata.exception.ChunkNotLoadedException;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
@@ -22,7 +23,11 @@ public class ChunkLoadHandler<T extends Serializable> implements Listener {
 
     @EventHandler
     public void onChunkLoad(ChunkLoadEvent event) {
-        storage.loadChunk(event.getChunk());
+        try {
+            storage.loadChunk(event.getChunk());
+        } catch (ChunkAlreadyLoadedException e) {
+            e.printStackTrace();
+        }
     }
 
     @EventHandler

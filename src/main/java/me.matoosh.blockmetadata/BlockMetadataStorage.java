@@ -5,6 +5,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import me.matoosh.blockmetadata.async.AsyncFiles;
+import me.matoosh.blockmetadata.exception.ChunkAlreadyLoadedException;
 import me.matoosh.blockmetadata.exception.ChunkBusyException;
 import me.matoosh.blockmetadata.exception.ChunkNotLoadedException;
 import org.bukkit.Bukkit;
@@ -112,7 +113,13 @@ public class BlockMetadataStorage<T extends Serializable> {
      */
     public void setMetadata(Block block, T metadata)
             throws ChunkBusyException, ChunkNotLoadedException {
-        modifyMetadataInChunk(block.getChunk()).put(getBlockKeyInChunk(block), metadata);
+        if (metadata == null) {
+            // clear metadata
+            removeMetadata(block);
+        } else {
+            // set metadata
+            modifyMetadataInChunk(block.getChunk()).put(getBlockKeyInChunk(block), metadata);
+        }
     }
 
     /**
@@ -229,7 +236,7 @@ public class BlockMetadataStorage<T extends Serializable> {
             newTask = regionTask.getTask().thenCompose(task);
         } else {
             // first future in the chain
-            System.out.println("New session - " + regionFile.toString());
+//            System.out.println("New session - " + regionFile.toString());
             newTask = task.apply(null);
         }
 
@@ -257,7 +264,7 @@ public class BlockMetadataStorage<T extends Serializable> {
                 }
 
                 // there is no task scheduled after this one for now because this one wasnt canceled
-                System.out.println("Commit session - " + regionFile.toString());
+//                System.out.println("Commit session - " + regionFile.toString());
                 busyRegions.remove(regionFile);
                 // clear the region record and commit if the buffer was modified
                 if (regionTask.isDirty()) {
@@ -345,7 +352,7 @@ public class BlockMetadataStorage<T extends Serializable> {
      */
     private CompletableFuture<Void> writeRegionData(
             Path regionFile, Map<String, Map<String, T>> data) {
-        System.out.println("Writing region data: " + regionFile);
+//        System.out.println("Writing region data: " + regionFile);
 
         // remove old file to overwrite
         return CompletableFuture.supplyAsync(() -> {
@@ -377,8 +384,14 @@ public class BlockMetadataStorage<T extends Serializable> {
             throws ChunkNotLoadedException {
         // check if chunk dirty
         if (!isChunkDirty(chunk)) {
+            // not busy, loaded or dirty anymore
+            if (unload) {
+                loadedChunks.remove(chunk);
+            }
+
             return CompletableFuture.completedFuture(null);
         }
+
         // save chunk asynchronously
         return scheduleRegionTask(chunk, (s) -> persistChunkAsync(chunk, unload));
     }
@@ -389,11 +402,11 @@ public class BlockMetadataStorage<T extends Serializable> {
      * @param unload Whether the chunk should be unloaded from memory.
      */
     private CompletableFuture<Void> persistChunkAsync(Chunk chunk, boolean unload) {
-        return CompletableFuture.supplyAsync(() -> {
-            // set busy
-            LoadedChunkData loadedChunkData = loadedChunks.get(chunk);
-            loadedChunkData.setBusy(true);
+        // set busy
+        LoadedChunkData loadedChunkData = loadedChunks.get(chunk);
+        loadedChunkData.setBusy(true);
 
+        return CompletableFuture.supplyAsync(() -> {
             // get appropriate file
             return getRegionFile(chunk);
         })
@@ -439,13 +452,22 @@ public class BlockMetadataStorage<T extends Serializable> {
             })
             .thenCompose((data) -> bufferRegionData(getRegionFile(chunk), data))
             .thenRun(() -> {
+                // not busy, loaded or dirty anymore
                 if (unload) {
                     loadedChunks.remove(chunk);
                 } else {
-                    LoadedChunkData loadedChunkData = loadedChunks.get(chunk);
                     loadedChunkData.setBusy(false);
                     loadedChunkData.setDirty(false);
                 }
+            })
+            .exceptionally((e) -> {
+                // not busy, loaded or dirty anymore
+                if (unload) {
+                    loadedChunks.remove(chunk);
+                } else {
+                    loadedChunkData.setBusy(false);
+                }
+                throw new CompletionException(e);
             });
     }
 
@@ -453,7 +475,12 @@ public class BlockMetadataStorage<T extends Serializable> {
      * Loads chunk metadata into memory.
      * @param chunk The chunk.
      */
-    public CompletableFuture<Void> loadChunk(Chunk chunk) {
+    public CompletableFuture<Void> loadChunk(Chunk chunk) throws ChunkAlreadyLoadedException {
+        // check if chunk loaded
+        if (isChunkLoaded(chunk)) {
+            throw new ChunkAlreadyLoadedException();
+        }
+
         // load chunk asynchronously
         return scheduleRegionTask(chunk, (s) -> loadChunkAsync(chunk));
     }
@@ -463,59 +490,40 @@ public class BlockMetadataStorage<T extends Serializable> {
      * @param chunk The chunk.
      */
     private CompletableFuture<Void> loadChunkAsync(Chunk chunk) {
-        return CompletableFuture.supplyAsync(() ->{
-            // set busy
-            LoadedChunkData chunkData = new LoadedChunkData();
-            chunkData.setBusy(true);
-            loadedChunks.put(chunk, chunkData);
+        // set busy
+        LoadedChunkData loadedChunkData = new LoadedChunkData();
+        loadedChunkData.setBusy(true);
+        loadedChunks.put(chunk, loadedChunkData);
 
+        return CompletableFuture.supplyAsync(() -> {
             // get appropriate file
             return getRegionFile(chunk);
         })
-                .thenCompose(this::readRegionData)
-                .exceptionally((e) -> {
-                    // error loading chunk data
-                    // not busy
-                    e.printStackTrace();
-                    return null;
-                })
-                .thenAccept((data) -> {
-                    // check if load was successful
-                    LoadedChunkData loadedChunkData = loadedChunks.get(chunk);
-                    if (data == null) {
-                        // no data for this chunk
-                        loadedChunkData.setBusy(false);
-                        return;
-                    }
-
-                    // load
-                    String chunkSection = getChunkKey(chunk);
-                    Map<String, T> chunkData = data.get(chunkSection);
-                    if (chunkData != null) {
-                        metadata.put(chunk, chunkData);
-                    }
-
-                    // not busy
+            .thenCompose(this::readRegionData)
+            .exceptionally((e) -> {
+                // error loading chunk data
+                // not busy
+                e.printStackTrace();
+                return null;
+            })
+            .thenAccept((data) -> {
+                // check if load was successful
+                if (data == null) {
+                    // no data for this chunk
                     loadedChunkData.setBusy(false);
-                });
-    }
+                    return;
+                }
 
-    /**
-     * Get a key unique to a region in which a chunk is located.
-     * @param chunk The chunk in the region.
-     * @return The region key.
-     */
-    public String getRegionKey(Chunk chunk) {
-        return (chunk.getX() / 16) + "_" + (chunk.getZ() / 16);
-    }
+                // load
+                String chunkSection = getChunkKey(chunk);
+                Map<String, T> chunkData = data.get(chunkSection);
+                if (chunkData != null) {
+                    metadata.put(chunk, chunkData);
+                }
 
-    /**
-     * Get a key unique to a chunk within a metadata region file.
-     * @param chunk The chunk.
-     * @return The chunk key.
-     */
-    public String getChunkKey(Chunk chunk) {
-        return chunk.getX() + "," + chunk.getZ();
+                // not busy
+                loadedChunkData.setBusy(false);
+            });
     }
 
     /**
@@ -571,15 +579,6 @@ public class BlockMetadataStorage<T extends Serializable> {
     }
 
     /**
-     * Get file name under which a region file should be saved.
-     * @param chunk The chunk in the saved region.
-     * @return The file name.
-     */
-    public Path getRegionFile(Chunk chunk) {
-        return dataPath.resolve(chunk.getWorld().getName() + "_" + getRegionKey(chunk) + ".yml");
-    }
-
-    /**
      * Gets a key unique for a block in a chunk.
      * @param block The block for which to get the key.
      * @return The key.
@@ -604,9 +603,36 @@ public class BlockMetadataStorage<T extends Serializable> {
     }
 
     /**
+     * Get a key unique to a chunk within a metadata region file.
+     * @param chunk The chunk.
+     * @return The chunk key.
+     */
+    private String getChunkKey(Chunk chunk) {
+        return chunk.getX() + "," + chunk.getZ();
+    }
+
+    /**
+     * Get file name under which a region file should be saved.
+     * @param chunk The chunk in the saved region.
+     * @return The file name.
+     */
+    private Path getRegionFile(Chunk chunk) {
+        return dataPath.resolve(chunk.getWorld().getName() + "_" + getRegionKey(chunk) + ".yml");
+    }
+
+    /**
+     * Get a key unique to a region in which a chunk is located.
+     * @param chunk The chunk in the region.
+     * @return The region key.
+     */
+    private String getRegionKey(Chunk chunk) {
+        return (chunk.getX() / 16) + "_" + (chunk.getZ() / 16);
+    }
+
+    /**
      * Represents a metadata task on a region.
      */
-    public class RegionTask {
+    private class RegionTask {
         /**
          * Future of the task that is currently running on the region.
          */
@@ -683,7 +709,7 @@ public class BlockMetadataStorage<T extends Serializable> {
     /**
      * Information about a loaded chunk
      */
-    public static class LoadedChunkData {
+    private static class LoadedChunkData {
         private boolean dirty;
         private boolean busy;
 

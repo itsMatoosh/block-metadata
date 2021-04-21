@@ -12,7 +12,7 @@ repositories {
 }
 
 dependencies {
-	implementation 'com.github.seeseemelk:MockBukkit:v1.16-SNAPSHOT'
+	implementation 'com.github.itsMatoosh:block-metadata:1.1.0'
 }
 ```
 ### Adding Block Metadata by Maven
@@ -28,7 +28,7 @@ Modify your pom.xml file to include the following:
 <dependency>
     <groupId>com.github.itsMatoosh</groupId>
     <artifactId>block-metadata</artifactId>
-    <version>1.0.2</version>
+    <version>1.1.0</version>
 </dependency>
 ```
 

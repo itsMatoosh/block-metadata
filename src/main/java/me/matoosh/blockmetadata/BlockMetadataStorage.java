@@ -5,6 +5,9 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import me.matoosh.blockmetadata.async.AsyncFiles;
+import me.matoosh.blockmetadata.event.BlockDestroyHandler;
+import me.matoosh.blockmetadata.event.BlockMoveHandler;
+import me.matoosh.blockmetadata.event.ChunkLoadHandler;
 import me.matoosh.blockmetadata.exception.ChunkAlreadyLoadedException;
 import me.matoosh.blockmetadata.exception.ChunkBusyException;
 import me.matoosh.blockmetadata.exception.ChunkNotLoadedException;
@@ -70,7 +73,16 @@ public class BlockMetadataStorage<T extends Serializable> {
         this.dataPath = dataPath;
 
         // automatically manage metadata loading/saving
-        Bukkit.getPluginManager().registerEvents(new ChunkLoadHandler<>(this), plugin);
+        Bukkit.getPluginManager().registerEvents(
+                new ChunkLoadHandler<>(this), plugin);
+
+        // automatically manage blocks moved by pistons
+        Bukkit.getPluginManager().registerEvents(
+                new BlockMoveHandler<>(this), plugin);
+
+        // automatically manage blocks that get destroyed
+        Bukkit.getPluginManager().registerEvents(
+                new BlockDestroyHandler<>(this), plugin);
     }
 
     /**
@@ -268,7 +280,6 @@ public class BlockMetadataStorage<T extends Serializable> {
                 }
 
                 // there is no task scheduled after this one for now because this one wasnt canceled
-//                System.out.println("Commit session - " + regionFile.toString());
                 busyRegions.remove(regionFile);
                 // clear the region record and commit if the buffer was modified
                 if (regionTask.isDirty()) {

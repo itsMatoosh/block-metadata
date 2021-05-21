@@ -1,4 +1,4 @@
-package me.matoosh.blockmetadata;
+package me.matoosh.blockmetadata.event;
 
 public class StringChunkLoadHandlerTest extends ChunkLoadHandlerTest<String> {
 }

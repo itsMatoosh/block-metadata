@@ -4,7 +4,7 @@ plugins {
 }
 
 group 'me.matoosh'
-version '1.1.0'
+version '1.2.0'
 
 repositories {
     maven {
@@ -26,11 +26,22 @@ dependencies {
     // spigot
     compileOnly 'org.spigotmc:spigot-api:1.16.5-R0.1-SNAPSHOT'
 
+    // lombok
+    compileOnly 'org.projectlombok:lombok:1.18.20'
+    annotationProcessor 'org.projectlombok:lombok:1.18.20'
+
+    testCompileOnly 'org.projectlombok:lombok:1.18.20'
+    testAnnotationProcessor 'org.projectlombok:lombok:1.18.20'
+
     // junit
     testImplementation 'org.junit.jupiter:junit-jupiter:5.7.1'
 
     // mock bukkit
     implementation 'com.github.seeseemelk:MockBukkit:v1.16-SNAPSHOT'
+
+    // mockito
+    testImplementation "org.mockito:mockito-core:3.+"
+    testImplementation "org.mockito:mockito-junit-jupiter:3.10.0"
 }
 
 test {

@@ -1,5 +1,7 @@
-package me.matoosh.blockmetadata;
+package me.matoosh.blockmetadata.event;
 
+import lombok.RequiredArgsConstructor;
+import me.matoosh.blockmetadata.BlockMetadataStorage;
 import me.matoosh.blockmetadata.exception.ChunkAlreadyLoadedException;
 import me.matoosh.blockmetadata.exception.ChunkNotLoadedException;
 import org.bukkit.event.EventHandler;
@@ -13,25 +15,20 @@ import java.io.Serializable;
  * Handles loading/saving block metadata automatically on chunk loading/unloading.
  * @param <T> Type of the saved metadata.
  */
+@RequiredArgsConstructor
 public class ChunkLoadHandler<T extends Serializable> implements Listener {
 
     private final BlockMetadataStorage<T> storage;
 
-    public ChunkLoadHandler(BlockMetadataStorage<T> metadataStorage) {
-        this.storage = metadataStorage;
+    @EventHandler
+    public void onChunkLoad(ChunkLoadEvent event)
+            throws ChunkAlreadyLoadedException {
+        storage.loadChunk(event.getChunk());
     }
 
     @EventHandler
-    public void onChunkLoad(ChunkLoadEvent event) {
-        try {
-            storage.loadChunk(event.getChunk());
-        } catch (ChunkAlreadyLoadedException e) {
-            e.printStackTrace();
-        }
-    }
-
-    @EventHandler
-    public void onChunkUnload(ChunkUnloadEvent event) throws ChunkNotLoadedException {
+    public void onChunkUnload(ChunkUnloadEvent event)
+            throws ChunkNotLoadedException {
         storage.persistChunk(event.getChunk(), true);
     }
 }

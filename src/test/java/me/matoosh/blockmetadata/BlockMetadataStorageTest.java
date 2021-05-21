@@ -27,7 +27,6 @@ import static org.junit.jupiter.api.Assertions.*;
 
 abstract class BlockMetadataStorageTest<T extends Serializable> {
 
-    private ServerMock server;
     private WorldMock world;
     private ChunkMock sampleChunk;
     private Block sampleBlock;
@@ -38,7 +37,7 @@ abstract class BlockMetadataStorageTest<T extends Serializable> {
     @BeforeEach
     void setUp() throws ExecutionException, InterruptedException,
             ChunkAlreadyLoadedException, IOException {
-        server = MockBukkit.mock();
+        ServerMock server = MockBukkit.mock();
         world = server.addSimpleWorld("test-world");
 
         Path dataDir = Files.createTempDirectory("block-metadata-temp");
@@ -275,5 +274,4 @@ abstract class BlockMetadataStorageTest<T extends Serializable> {
         // ensure keys are unique
         assertEquals(16 * 16 * 256, keys.size());
     }
-
 }

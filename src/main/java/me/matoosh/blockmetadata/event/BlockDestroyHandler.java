@@ -14,6 +14,10 @@ import org.bukkit.event.entity.EntityChangeBlockEvent;
 
 import java.io.Serializable;
 
+/**
+ * Handles clearing block metadata when a block is destroyed.
+ * @param <T> Type of the saved metadata.
+ */
 @RequiredArgsConstructor
 public class BlockDestroyHandler<T extends Serializable> implements Listener {
     private final BlockMetadataStorage<T> storage;

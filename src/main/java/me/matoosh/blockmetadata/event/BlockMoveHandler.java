@@ -3,7 +3,6 @@ package me.matoosh.blockmetadata.event;
 import lombok.RequiredArgsConstructor;
 import me.matoosh.blockmetadata.BlockMetadataStorage;
 import me.matoosh.blockmetadata.exception.ChunkBusyException;
-import me.matoosh.blockmetadata.exception.ChunkNotLoadedException;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
 import org.bukkit.event.EventHandler;
@@ -27,8 +26,7 @@ public class BlockMoveHandler<T extends Serializable> implements Listener {
     private final BlockMetadataStorage<T> storage;
 
     @EventHandler(priority = EventPriority.LOW)
-    public void onBlockPistonExtend(BlockPistonExtendEvent event)
-            throws ChunkBusyException, ChunkNotLoadedException {
+    public void onBlockPistonExtend(BlockPistonExtendEvent event) throws ChunkBusyException {
         if (event.isCancelled()) {
             return;
         }
@@ -36,8 +34,7 @@ public class BlockMoveHandler<T extends Serializable> implements Listener {
     }
 
     @EventHandler(priority = EventPriority.LOW)
-    public void onBlockPistonRetract(BlockPistonRetractEvent event)
-            throws ChunkBusyException, ChunkNotLoadedException {
+    public void onBlockPistonRetract(BlockPistonRetractEvent event) throws ChunkBusyException {
         if (event.isCancelled()) {
             return;
         }
@@ -50,10 +47,8 @@ public class BlockMoveHandler<T extends Serializable> implements Listener {
      * @param blocks The blocks that were moved.
      * @param direction The direction in which the blocks were moved.
      * @throws ChunkBusyException thrown if the chunk is busy.
-     * @throws ChunkNotLoadedException thrown if the chunk metadata was not loaded.
      */
-    private void onBlocksMoveByPiston(List<Block> blocks, BlockFace direction)
-            throws ChunkBusyException, ChunkNotLoadedException {
+    private void onBlocksMoveByPiston(List<Block> blocks, BlockFace direction) throws ChunkBusyException {
         // cache origin block metadata
         Map<Block, T> cachedMetadata = new HashMap<>();
         for (Block origin : blocks) {

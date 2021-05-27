@@ -1,9 +1,6 @@
 package me.matoosh.blockmetadata;
 
-import be.seeseemelk.mockbukkit.ChunkMock;
-import be.seeseemelk.mockbukkit.MockBukkit;
-import be.seeseemelk.mockbukkit.ServerMock;
-import be.seeseemelk.mockbukkit.WorldMock;
+import be.seeseemelk.mockbukkit.*;
 import me.matoosh.blockmetadata.exception.ChunkAlreadyLoadedException;
 import me.matoosh.blockmetadata.exception.ChunkBusyException;
 import me.matoosh.blockmetadata.exception.ChunkNotLoadedException;
@@ -38,10 +35,11 @@ abstract class BlockMetadataStorageTest<T extends Serializable> {
     void setUp() throws ExecutionException, InterruptedException,
             ChunkAlreadyLoadedException, IOException {
         ServerMock server = MockBukkit.mock();
+        MockPlugin mockPlugin = MockBukkit.createMockPlugin();
         world = server.addSimpleWorld("test-world");
 
         Path dataDir = Files.createTempDirectory("block-metadata-temp");
-        blockMetadataStorage = new BlockMetadataStorage<>(dataDir);
+        blockMetadataStorage = new BlockMetadataStorage<>(mockPlugin, dataDir);
 
         // load a chunk into memory
         sampleChunk = world.getChunkAt(0, 0);
@@ -57,14 +55,14 @@ abstract class BlockMetadataStorageTest<T extends Serializable> {
     }
 
     @Test
-    void getMetadataNull() throws ChunkBusyException, ChunkNotLoadedException {
+    void getMetadataNull() throws ChunkBusyException {
         T metadata = blockMetadataStorage.getMetadata(
                 sampleChunk.getBlock(0, 0, 0));
         assertNull(metadata);
     }
 
     @Test
-    void setGetMetadata() throws ChunkBusyException, ChunkNotLoadedException {
+    void setGetMetadata() throws ChunkBusyException {
         // set metadata on a block
         T metadata = createMetadata();
         blockMetadataStorage.setMetadata(sampleBlock, metadata);
@@ -77,7 +75,33 @@ abstract class BlockMetadataStorageTest<T extends Serializable> {
     }
 
     @Test
-    void removeMetadata() throws ChunkNotLoadedException, ChunkBusyException {
+    void setGetMetadataAutoloadChunk() throws ChunkBusyException, ChunkNotLoadedException,
+            ExecutionException, InterruptedException {
+        // unload the sample chunk
+        blockMetadataStorage.persistChunk(sampleChunk, true).get();
+
+        // ensure chunk is not loaded
+        assertFalse(blockMetadataStorage.isChunkLoaded(sampleChunk));
+
+        // set metadata on a block
+        T metadata = createMetadata();
+        blockMetadataStorage.setMetadata(sampleBlock, metadata);
+
+        // ensure chunk is loaded now
+        assertTrue(blockMetadataStorage.isChunkLoaded(sampleChunk));
+
+        // unload the sample chunk
+        blockMetadataStorage.persistChunk(sampleChunk, true).get();
+
+        // retrieve the metadata
+        blockMetadataStorage.getMetadata(sampleBlock);
+
+        // ensure chunk is loaded now
+        assertTrue(blockMetadataStorage.isChunkLoaded(sampleChunk));
+    }
+
+    @Test
+    void removeMetadata() throws ChunkBusyException {
         // set metadata on a block
         T metadata = createMetadata();
         blockMetadataStorage.setMetadata(sampleBlock, metadata);
@@ -93,7 +117,7 @@ abstract class BlockMetadataStorageTest<T extends Serializable> {
     }
 
     @Test
-    void hasMetadataForChunk() throws ChunkNotLoadedException, ChunkBusyException {
+    void hasMetadataForChunk() throws ChunkBusyException {
         // initially there should be no metadata
         assertFalse(blockMetadataStorage.hasMetadataForChunk(sampleChunk));
 
@@ -110,7 +134,7 @@ abstract class BlockMetadataStorageTest<T extends Serializable> {
     }
 
     @Test
-    void removeMetadataForChunk() throws ChunkNotLoadedException, ChunkBusyException {
+    void removeMetadataForChunk() throws ChunkBusyException {
         // initially there should be no metadata
         assertFalse(blockMetadataStorage.hasMetadataForChunk(sampleChunk));
 
@@ -157,7 +181,7 @@ abstract class BlockMetadataStorageTest<T extends Serializable> {
     }
 
     @Test
-    void getMetadataInChunk() throws ChunkNotLoadedException, ChunkBusyException {
+    void getMetadataInChunk() throws ChunkBusyException {
         // get metadata
         assertNull(blockMetadataStorage.getMetadataInChunk(sampleChunk));
 
@@ -198,8 +222,7 @@ abstract class BlockMetadataStorageTest<T extends Serializable> {
         assertFalse(blockMetadataStorage.isChunkLoaded(sampleChunk));
 
         // metadata should not be accessible now
-        assertThrows(ChunkNotLoadedException.class,
-                () -> blockMetadataStorage.getMetadata(sampleBlock));
+        assertFalse(blockMetadataStorage.isChunkLoaded(sampleBlock.getChunk()));
 
         // load chunk
         blockMetadataStorage.loadChunk(sampleChunk).get();

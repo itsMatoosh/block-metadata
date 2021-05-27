@@ -5,7 +5,6 @@ import be.seeseemelk.mockbukkit.ServerMock;
 import be.seeseemelk.mockbukkit.WorldMock;
 import me.matoosh.blockmetadata.BlockMetadataStorage;
 import me.matoosh.blockmetadata.exception.ChunkBusyException;
-import me.matoosh.blockmetadata.exception.ChunkNotLoadedException;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
 import org.bukkit.event.block.BlockPistonExtendEvent;
@@ -60,8 +59,7 @@ abstract class BlockMoveHandlerTest<T extends Serializable> {
 
     @ParameterizedTest
     @MethodSource("directionGenerator")
-    void extendSingleBlock(BlockFace direction)
-            throws ChunkNotLoadedException, ChunkBusyException {
+    void extendSingleBlock(BlockFace direction) throws ChunkBusyException {
         // mock origin
         Block origin = pistonBlock.getRelative(direction);
         when(blockMetadataStorage.removeMetadata(origin))
@@ -83,8 +81,7 @@ abstract class BlockMoveHandlerTest<T extends Serializable> {
 
     @ParameterizedTest
     @MethodSource("directionGenerator")
-    void extendSingleBlockNoMetadata(BlockFace direction)
-            throws ChunkNotLoadedException, ChunkBusyException {
+    void extendSingleBlockNoMetadata(BlockFace direction) throws ChunkBusyException {
         // mock origin
         Block origin = pistonBlock.getRelative(direction);
         when(blockMetadataStorage.removeMetadata(origin))
@@ -102,8 +99,7 @@ abstract class BlockMoveHandlerTest<T extends Serializable> {
 
     @ParameterizedTest
     @MethodSource("directionGenerator")
-    void retractSingleBlock(BlockFace direction)
-            throws ChunkNotLoadedException, ChunkBusyException {
+    void retractSingleBlock(BlockFace direction) throws ChunkBusyException {
         // mock origin
         Block origin = pistonBlock.getRelative(direction);
         when(blockMetadataStorage.removeMetadata(origin))
@@ -125,8 +121,7 @@ abstract class BlockMoveHandlerTest<T extends Serializable> {
 
     @ParameterizedTest
     @MethodSource("directionGenerator")
-    void retractSingleBlockNoMetadata(BlockFace direction)
-            throws ChunkNotLoadedException, ChunkBusyException {
+    void retractSingleBlockNoMetadata(BlockFace direction) throws ChunkBusyException {
         // mock origin
         Block origin = pistonBlock.getRelative(direction);
         when(blockMetadataStorage.removeMetadata(origin))

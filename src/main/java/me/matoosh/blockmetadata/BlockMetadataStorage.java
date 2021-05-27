@@ -23,9 +23,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.concurrent.CancellationException;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
+import java.util.concurrent.*;
 
 /**
  * Service managing the storage of block metadata.
@@ -59,6 +57,12 @@ public class BlockMetadataStorage<T extends Serializable> {
     private final ObjectMapper mapper = new ObjectMapper(new YAMLFactory());
 
     /**
+     * The currently loading chunks.
+     * Prevents double loads.
+     */
+    private final Map<Chunk, CompletableFuture<Void>> loadingChunks = new HashMap<>();
+
+    /**
      * Instantiates a new block metadata storage with automatic loading/saving.
      * @param plugin Instance of the plugin.
      * @param dataPath Path where the metadata should be stored on disk.
@@ -86,24 +90,13 @@ public class BlockMetadataStorage<T extends Serializable> {
     }
 
     /**
-     * Instantiates a new block metadata storage.
-     * @param dataPath Path where the metadata should be stored on disk.
-     */
-    public BlockMetadataStorage(Path dataPath) {
-        // set data path
-        this.dataPath = dataPath;
-    }
-
-    /**
      * Get metadata of a block.
      * @param block The block.
      * @return Current metadata of the block. Null if no data stored.
      * @throws ChunkBusyException Thrown if the chunk is busy.
-     * @throws ChunkNotLoadedException Thrown if the chunk is not loaded.
      * @return The fetched metadata value.
      */
-    public T getMetadata(Block block)
-            throws ChunkBusyException, ChunkNotLoadedException {
+    public T getMetadata(Block block) throws ChunkBusyException {
         if (block == null) return null;
 
         // get chunk
@@ -122,10 +115,8 @@ public class BlockMetadataStorage<T extends Serializable> {
      * @param block The block.
      * @param metadata Metadata to set to the block.
      * @throws ChunkBusyException Thrown if the chunk is busy.
-     * @throws ChunkNotLoadedException Thrown if the chunk is not loaded.
      */
-    public void setMetadata(Block block, T metadata)
-            throws ChunkBusyException, ChunkNotLoadedException {
+    public void setMetadata(Block block, T metadata) throws ChunkBusyException {
         if (metadata == null) {
             // clear metadata
             removeMetadata(block);
@@ -139,11 +130,9 @@ public class BlockMetadataStorage<T extends Serializable> {
      * Removes metadata for a block.
      * @param block The block.
      * @throws ChunkBusyException Thrown if the chunk is busy.
-     * @throws ChunkNotLoadedException Thrown if the chunk is not loaded.
      * @return The removed metadata value. Null if no value was stored.
      */
-    public T removeMetadata(Block block)
-            throws ChunkBusyException, ChunkNotLoadedException {
+    public T removeMetadata(Block block) throws ChunkBusyException {
         // cache chunk
         Chunk chunk = block.getChunk();
 
@@ -172,10 +161,8 @@ public class BlockMetadataStorage<T extends Serializable> {
      * @param chunk The chunk to check.
      * @return Whether there are metadata stored for the given chunk.
      * @throws ChunkBusyException Thrown if the chunk is busy.
-     * @throws ChunkNotLoadedException Thrown if the chunk is not loaded.
      */
-    public boolean hasMetadataForChunk(Chunk chunk)
-            throws ChunkBusyException, ChunkNotLoadedException {
+    public boolean hasMetadataForChunk(Chunk chunk) throws ChunkBusyException {
         ensureChunkReady(chunk);
         return metadata.containsKey(chunk);
     }
@@ -184,10 +171,8 @@ public class BlockMetadataStorage<T extends Serializable> {
      * Removes all metadata stored for a given chunk.
      * @param chunk The chunk to remove metadata from.
      * @throws ChunkBusyException Thrown if the chunk is busy.
-     * @throws ChunkNotLoadedException Thrown if the chunk is not loaded.
      */
-    public void removeMetadataForChunk(Chunk chunk)
-            throws ChunkBusyException, ChunkNotLoadedException {
+    public void removeMetadataForChunk(Chunk chunk) throws ChunkBusyException {
         ensureChunkReady(chunk);
         metadata.remove(chunk);
         LoadedChunkData loadedChunkData = loadedChunks.get(chunk);
@@ -200,10 +185,8 @@ public class BlockMetadataStorage<T extends Serializable> {
      * @param chunk The chunk in which the metadata are.
      * @return Map of metadata.
      * @throws ChunkBusyException Thrown if the chunk is busy.
-     * @throws ChunkNotLoadedException Thrown if the chunk is not loaded.
      */
-    public Map<String, T> modifyMetadataInChunk(Chunk chunk)
-            throws ChunkBusyException, ChunkNotLoadedException {
+    public Map<String, T> modifyMetadataInChunk(Chunk chunk) throws ChunkBusyException {
         ensureChunkReady(chunk);
         Map<String, T> data = metadata.computeIfAbsent(chunk, k -> new HashMap<>());
         LoadedChunkData loadedChunkData = loadedChunks.get(chunk);
@@ -216,10 +199,8 @@ public class BlockMetadataStorage<T extends Serializable> {
      * @param chunk The chunk in which the metadata are.
      * @return Map of metadata.
      * @throws ChunkBusyException Thrown if the chunk is busy.
-     * @throws ChunkNotLoadedException Thrown if the chunk is not loaded.
      */
-    public Map<String, T> getMetadataInChunk(Chunk chunk)
-            throws ChunkBusyException, ChunkNotLoadedException {
+    public Map<String, T> getMetadataInChunk(Chunk chunk) throws ChunkBusyException {
         ensureChunkReady(chunk);
         return metadata.get(chunk);
     }
@@ -523,8 +504,16 @@ public class BlockMetadataStorage<T extends Serializable> {
             throw new ChunkAlreadyLoadedException();
         }
 
+        // check if chunk is already loading
+        if (loadingChunks.containsKey(chunk)) {
+            return loadingChunks.get(chunk);
+        }
+
         // load chunk asynchronously
-        return scheduleRegionTask(chunk, (s) -> loadChunkAsync(chunk));
+        CompletableFuture<Void> future = scheduleRegionTask(chunk, (s) -> loadChunkAsync(chunk))
+                .thenRun(() -> loadingChunks.remove(chunk));
+        loadingChunks.put(chunk, future);
+        return future;
     }
 
     /**
@@ -569,16 +558,25 @@ public class BlockMetadataStorage<T extends Serializable> {
     }
 
     /**
-     * Ensures that a chunk is ready. Throws exceptions in other case.
+     * Ensures that a chunk is ready to be interacted with.
+     * Loads chunk if not loaded.
      * @param chunk The chunk.
-     * @throws ChunkNotLoadedException Thrown if the chunk is not loaded.
      * @throws ChunkBusyException Thrown if the chunk is busy.
      */
-    public void ensureChunkReady(Chunk chunk)
-            throws ChunkNotLoadedException, ChunkBusyException {
-        boolean busy = isChunkBusy(chunk);
-        if (busy) {
-            throw new ChunkBusyException();
+    public void ensureChunkReady(Chunk chunk) throws ChunkBusyException {
+        try {
+            if (isChunkBusy(chunk)) {
+                throw new ChunkBusyException();
+            }
+        } catch (ChunkNotLoadedException e) {
+            // load chunk first
+            try {
+                loadChunk(chunk).get();
+                chunk.load();
+            } catch (InterruptedException | ExecutionException | ChunkAlreadyLoadedException ex) {
+                // should not happen
+                e.printStackTrace();
+            }
         }
     }
 

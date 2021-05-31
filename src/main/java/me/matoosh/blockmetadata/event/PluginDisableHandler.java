@@ -3,10 +3,12 @@ package me.matoosh.blockmetadata.event;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.java.Log;
 import me.matoosh.blockmetadata.BlockMetadataStorage;
+import me.matoosh.blockmetadata.exception.ChunkNotLoadedException;
 import org.bukkit.Chunk;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.server.PluginDisableEvent;
+import org.bukkit.event.world.WorldUnloadEvent;
 
 import java.io.Serializable;
 import java.util.Map;
@@ -22,6 +24,17 @@ import java.util.concurrent.ExecutionException;
 public class PluginDisableHandler<T extends Serializable> implements Listener {
 
     private final BlockMetadataStorage<T> storage;
+
+    @EventHandler
+    public void onWorldUnload(WorldUnloadEvent event) {
+        log.info("Saving metadata in world " + event.getWorld().getName());
+        for (Chunk c : event.getWorld().getLoadedChunks()) {
+            try {
+                storage.persistChunk(c);
+            } catch (ChunkNotLoadedException ignored) {
+            }
+        }
+    }
 
     @EventHandler
     public void onServerStop(PluginDisableEvent event)

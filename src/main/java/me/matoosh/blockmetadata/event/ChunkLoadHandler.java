@@ -29,6 +29,6 @@ public class ChunkLoadHandler<T extends Serializable> implements Listener {
     @EventHandler
     public void onChunkUnload(ChunkUnloadEvent event)
             throws ChunkNotLoadedException {
-        storage.persistChunk(event.getChunk(), true);
+        storage.persistChunk(event.getChunk());
     }
 }

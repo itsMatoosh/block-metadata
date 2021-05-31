@@ -3,6 +3,6 @@ package me.matoosh.blockmetadata;
 public class BlockStringMetadataStorageTest extends BlockMetadataStorageTest<String> {
     @Override
     protected String createMetadata() {
-        return "123";
+        return "testMetadata";
     }
 }

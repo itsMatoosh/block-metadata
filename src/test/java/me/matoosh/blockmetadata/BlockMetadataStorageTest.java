@@ -78,7 +78,7 @@ abstract class BlockMetadataStorageTest<T extends Serializable> {
     void setGetMetadataAutoloadChunk() throws ChunkBusyException, ChunkNotLoadedException,
             ExecutionException, InterruptedException {
         // unload the sample chunk
-        blockMetadataStorage.persistChunk(sampleChunk, true).get();
+        blockMetadataStorage.persistChunk(sampleChunk).get();
 
         // ensure chunk is not loaded
         assertFalse(blockMetadataStorage.isChunkLoaded(sampleChunk));
@@ -91,7 +91,7 @@ abstract class BlockMetadataStorageTest<T extends Serializable> {
         assertTrue(blockMetadataStorage.isChunkLoaded(sampleChunk));
 
         // unload the sample chunk
-        blockMetadataStorage.persistChunk(sampleChunk, true).get();
+        blockMetadataStorage.persistChunk(sampleChunk).get();
 
         // retrieve the metadata
         blockMetadataStorage.getMetadata(sampleBlock);
@@ -216,7 +216,7 @@ abstract class BlockMetadataStorageTest<T extends Serializable> {
         blockMetadataStorage.setMetadata(sampleBlock, metadata);
 
         // save chunk
-        blockMetadataStorage.persistChunk(sampleChunk, true).get();
+        blockMetadataStorage.persistChunk(sampleChunk).get();
 
         // should be unloaded
         assertFalse(blockMetadataStorage.isChunkLoaded(sampleChunk));
@@ -251,7 +251,7 @@ abstract class BlockMetadataStorageTest<T extends Serializable> {
         assertTrue(blockMetadataStorage.isChunkLoaded(toLoad));
 
         // unload chunk
-        blockMetadataStorage.persistChunk(toLoad, true).get();
+        blockMetadataStorage.persistChunk(toLoad).get();
 
         // shouldn't be loaded
         assertFalse(blockMetadataStorage.isChunkLoaded(toLoad));
@@ -274,7 +274,7 @@ abstract class BlockMetadataStorageTest<T extends Serializable> {
         assertFalse(blockMetadataStorage.isChunkBusy(chunk));
 
         // start saving the chunk
-        CompletableFuture<Void> saveFuture = blockMetadataStorage.persistChunk(chunk, false);
+        CompletableFuture<Void> saveFuture = blockMetadataStorage.persistChunk(chunk);
         // chunk should be busy while saving
         assertTrue(blockMetadataStorage.isChunkBusy(chunk) || saveFuture.isDone());
         // finish loading

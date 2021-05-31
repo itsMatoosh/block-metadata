@@ -8,6 +8,6 @@ public class StringBlockMoveHandlerTest extends BlockMoveHandlerTest<String> {
      */
     @Override
     protected String createSampleMetadata() {
-        return "test";
+        return "testMetadata";
     }
 }

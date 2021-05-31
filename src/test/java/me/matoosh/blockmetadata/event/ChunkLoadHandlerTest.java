@@ -49,7 +49,6 @@ abstract class ChunkLoadHandlerTest<T extends Serializable> {
         chunkLoadHandler.onChunkUnload(new ChunkUnloadEvent(sampleChunk, true));
 
         // assert that the chunk unload caused metadata unload
-        verify(blockMetadataStorage, times(1))
-                .persistChunk(sampleChunk, true);
+        verify(blockMetadataStorage, times(1)).persistChunk(sampleChunk);
     }
 }

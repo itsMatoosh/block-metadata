@@ -4,10 +4,13 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
+import lombok.Data;
+import lombok.extern.java.Log;
 import me.matoosh.blockmetadata.async.AsyncFiles;
 import me.matoosh.blockmetadata.event.BlockDestroyHandler;
 import me.matoosh.blockmetadata.event.BlockMoveHandler;
 import me.matoosh.blockmetadata.event.ChunkLoadHandler;
+import me.matoosh.blockmetadata.event.PluginDisableHandler;
 import me.matoosh.blockmetadata.exception.ChunkAlreadyLoadedException;
 import me.matoosh.blockmetadata.exception.ChunkBusyException;
 import me.matoosh.blockmetadata.exception.ChunkNotLoadedException;
@@ -23,12 +26,16 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.concurrent.*;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
 
 /**
  * Service managing the storage of block metadata.
  * @param <T> The type of metadata to store.
  */
+@Log
 public class BlockMetadataStorage<T extends Serializable> {
 
     /**
@@ -63,6 +70,11 @@ public class BlockMetadataStorage<T extends Serializable> {
     private final Map<Chunk, CompletableFuture<Void>> loadingChunks = new HashMap<>();
 
     /**
+     * The currently saving chunks.
+     */
+    private final Map<Chunk, CompletableFuture<Void>> savingChunks = new HashMap<>();
+
+    /**
      * Instantiates a new block metadata storage with automatic loading/saving.
      * @param plugin Instance of the plugin.
      * @param dataPath Path where the metadata should be stored on disk.
@@ -87,6 +99,12 @@ public class BlockMetadataStorage<T extends Serializable> {
         // automatically manage blocks that get destroyed
         Bukkit.getPluginManager().registerEvents(
                 new BlockDestroyHandler<>(this), plugin);
+
+        // automatically manage metadata saving when plugin disabled
+        Bukkit.getPluginManager().registerEvents(
+                new PluginDisableHandler<>(this), plugin);
+
+        log.info("Block Metadata storage registered at: " + dataPath);
     }
 
     /**
@@ -94,7 +112,6 @@ public class BlockMetadataStorage<T extends Serializable> {
      * @param block The block.
      * @return Current metadata of the block. Null if no data stored.
      * @throws ChunkBusyException Thrown if the chunk is busy.
-     * @return The fetched metadata value.
      */
     public T getMetadata(Block block) throws ChunkBusyException {
         if (block == null) return null;
@@ -233,7 +250,6 @@ public class BlockMetadataStorage<T extends Serializable> {
             newTask = regionTask.getTask().thenCompose(task);
         } else {
             // first future in the chain
-//            System.out.println("New session - " + regionFile.toString());
             newTask = task.apply(null);
         }
 
@@ -260,7 +276,7 @@ public class BlockMetadataStorage<T extends Serializable> {
                     return null;
                 }
 
-                // there is no task scheduled after this one for now because this one wasnt canceled
+                // there is no task scheduled after this one for now because this one wasn't cancelled
                 busyRegions.remove(regionFile);
                 // clear the region record and commit if the buffer was modified
                 if (regionTask.isDirty()) {
@@ -348,8 +364,6 @@ public class BlockMetadataStorage<T extends Serializable> {
      */
     private CompletableFuture<Void> writeRegionData(
             Path regionFile, Map<String, Map<String, T>> data) {
-//        System.out.println("Writing region data: " + regionFile);
-
         // remove old file to overwrite
         return CompletableFuture.supplyAsync(() -> {
             try {
@@ -373,68 +387,61 @@ public class BlockMetadataStorage<T extends Serializable> {
     /**
      * Persists metadata of specified chunks on disk.
      * @param chunks Chunks to persist metadata for.
-     * @param unload Whether the chunks should be unloaded from memory.
      */
-    public CompletableFuture<Void> persistChunks(boolean unload, Chunk... chunks)
+    public CompletableFuture<Void> persistChunks(Chunk... chunks)
             throws ChunkNotLoadedException {
         CompletableFuture<Void>[] tasks = new CompletableFuture[chunks.length];
         for (int i = 0; i < chunks.length; i++) {
-            tasks[i] = persistChunk(chunks[i], unload);
+            tasks[i] = persistChunk(chunks[i]);
         }
         return CompletableFuture.allOf(tasks);
     }
 
     /**
-     * Persists chunk metadata on disk.
+     * Persists chunk metadata on disk and unloads the metadata from memory.
      * @param chunk The chunk to persist.
-     * @param unload Whether the chunk should be unloaded from memory.
      * @throws ChunkNotLoadedException Thrown if the chunk isn't loaded.
      */
-    public CompletableFuture<Void> persistChunk(Chunk chunk, boolean unload)
+    public CompletableFuture<Void> persistChunk(Chunk chunk)
             throws ChunkNotLoadedException {
         // check if chunk dirty
         if (!isChunkDirty(chunk)) {
-            // not busy, loaded or dirty anymore
-            if (unload) {
-                loadedChunks.remove(chunk);
-            }
+            // not dirty, nothing to save to disk
+            loadedChunks.remove(chunk);
 
             return CompletableFuture.completedFuture(null);
         }
 
+        // check if chunk is already being persisted
+        if (savingChunks.containsKey(chunk)) {
+            return savingChunks.get(chunk);
+        }
+
         // save chunk asynchronously
-        return scheduleRegionTask(chunk, (s) -> persistChunkAsync(chunk, unload));
+        CompletableFuture<Void> future = scheduleRegionTask(chunk, (s) -> persistChunkAsync(chunk))
+                .thenRun(() -> savingChunks.remove(chunk));
+        savingChunks.put(chunk, future);
+        return future;
     }
 
     /**
      * Persists chunk metadata on disk asynchronously.
      * @param chunk The chunk to persist.
-     * @param unload Whether the chunk should be unloaded from memory.
      */
-    private CompletableFuture<Void> persistChunkAsync(Chunk chunk, boolean unload) {
-        // set busy
-        LoadedChunkData loadedChunkData = loadedChunks.get(chunk);
-        loadedChunkData.setBusy(true);
-
+    private CompletableFuture<Void> persistChunkAsync(Chunk chunk) {
         return CompletableFuture.supplyAsync(() -> {
             // get appropriate file
             return getRegionFile(chunk);
         })
             .thenCompose(this::readRegionData)
-            .exceptionally((e) ->{
-                // error reading file
-                // possibly doesnt exist
+            .exceptionally((e) -> {
                 e.printStackTrace();
                 return null;
             })
             .thenApply((data) -> {
                 // get chunk data
-                Map<String, T> chunkMetadata;
-                if(unload) {
-                    chunkMetadata = metadata.remove(chunk);
-                } else {
-                    chunkMetadata = metadata.get(chunk);
-                }
+                Map<String, T> chunkMetadata = metadata.remove(chunk);
+                loadedChunks.remove(chunk);
 
                 // update data
                 String chunkSection = getChunkKey(chunk);
@@ -461,23 +468,9 @@ public class BlockMetadataStorage<T extends Serializable> {
                 return data;
             })
             .thenCompose((data) -> bufferRegionData(getRegionFile(chunk), data))
-            .thenRun(() -> {
-                // not busy, loaded or dirty anymore
-                if (unload) {
-                    loadedChunks.remove(chunk);
-                } else {
-                    loadedChunkData.setBusy(false);
-                    loadedChunkData.setDirty(false);
-                }
-            })
             .exceptionally((e) -> {
-                // not busy or loaded anymore
-                if (unload) {
-                    loadedChunks.remove(chunk);
-                } else {
-                    loadedChunkData.setBusy(false);
-                }
-                throw new CompletionException(e);
+                e.printStackTrace();
+                return null;
             });
     }
 
@@ -526,6 +519,10 @@ public class BlockMetadataStorage<T extends Serializable> {
             return getRegionFile(chunk);
         })
             .thenCompose(this::readRegionData)
+            .exceptionally((e) -> {
+                e.printStackTrace();
+                return null;
+            })
             .thenAccept((data) -> {
                 // check if load was successful
                 if (data == null) {
@@ -553,11 +550,8 @@ public class BlockMetadataStorage<T extends Serializable> {
      * @throws ChunkBusyException Thrown if the chunk is busy.
      */
     public void ensureChunkReady(Chunk chunk) throws ChunkBusyException {
-        try {
-            if (isChunkBusy(chunk)) {
-                throw new ChunkBusyException();
-            }
-        } catch (ChunkNotLoadedException e) {
+        // ensure chunk is loaded
+        if (!isChunkLoaded(chunk)) {
             // load chunk first
             try {
                 if (!chunk.isLoaded()) {
@@ -566,23 +560,43 @@ public class BlockMetadataStorage<T extends Serializable> {
                 loadChunk(chunk).get();
             } catch (InterruptedException | ExecutionException | ChunkAlreadyLoadedException ex) {
                 // should not happen
-                e.printStackTrace();
+                ex.printStackTrace();
             }
+        }
+
+        // ensure chunk is not busy
+        if (isChunkBusy(chunk)) {
+            throw new ChunkBusyException();
         }
     }
 
     /**
      * Checks whether the specified chunk is busy.
-     * A chunk is busy if it's being loaded/unloaded.
+     * A chunk is busy if it's being saved.
      * @param chunk The chunk.
      * @return Whether the chunk is busy.
      */
-    public boolean isChunkBusy(Chunk chunk) throws ChunkNotLoadedException {
+    public boolean isChunkBusy(Chunk chunk) {
+        return savingChunks.containsKey(chunk);
+    }
+
+    /**
+     * Checks whether the specified chunk is loading.
+     * @param chunk The chunk.
+     * @return Whether the chunk is loading.
+     */
+    public boolean isChunkLoading(Chunk chunk) {
+        return loadingChunks.containsKey(chunk);
+    }
+
+    /**
+     * Checks whether the specified chunk is loaded.
+     * @param chunk The chunk.
+     * @return Whether the chunk is loaded.
+     */
+    public boolean isChunkLoaded(Chunk chunk) {
         LoadedChunkData loadedChunkData = loadedChunks.get(chunk);
-        if (loadedChunkData == null) {
-            throw new ChunkNotLoadedException();
-        }
-        return loadedChunkData.isBusy();
+        return loadedChunkData != null;
     }
 
     /**
@@ -597,16 +611,6 @@ public class BlockMetadataStorage<T extends Serializable> {
             throw new ChunkNotLoadedException();
         }
         return loadedChunkData.isDirty();
-    }
-
-    /**
-     * Checks whether the specified chunk is loaded.
-     * @param chunk The chunk.
-     * @return Whether the chunk is loaded.
-     */
-    public boolean isChunkLoaded(Chunk chunk) {
-        LoadedChunkData loadedChunkData = loadedChunks.get(chunk);
-        return loadedChunkData != null;
     }
 
     /**
@@ -661,8 +665,25 @@ public class BlockMetadataStorage<T extends Serializable> {
     }
 
     /**
+     * Get the currently loading chunks.
+     * @return List of all currently loading chunks and their futures.
+     */
+    public Map<Chunk, CompletableFuture<Void>> getLoadingChunks() {
+        return loadingChunks;
+    }
+
+    /**
+     * Get the currently saving chunks.
+     * @return List of all currently saving chunks and their futures.
+     */
+    public Map<Chunk, CompletableFuture<Void>> getSavingChunks() {
+        return savingChunks;
+    }
+
+    /**
      * Represents a metadata task on a region.
      */
+    @Data
     private class RegionTask {
         /**
          * Future of the task that is currently running on the region.
@@ -691,73 +712,13 @@ public class BlockMetadataStorage<T extends Serializable> {
          * If true, the metadata is stored in the buffer variable.
          */
         private boolean buffered;
-
-        public RegionTask() {
-            this.buffered = false;
-        }
-
-        public CompletableFuture<Void> getTask() {
-            return task;
-        }
-
-        public void setTask(CompletableFuture<Void> task) {
-            this.task = task;
-        }
-
-        public Map<String, Map<String, T>> getBuffer() {
-            return buffer;
-        }
-
-        public void setBuffer(Map<String, Map<String, T>> buffer) {
-            this.buffer = buffer;
-        }
-
-        public boolean isDirty() {
-            return dirty;
-        }
-
-        public void setDirty(boolean dirty) {
-            this.dirty = dirty;
-        }
-
-        public boolean isBuffered() {
-            return buffered;
-        }
-
-        public void setBuffered(boolean buffered) {
-            this.buffered = buffered;
-        }
-
-        public CompletableFuture<Boolean> getCleanupTask() {
-            return cleanupTask;
-        }
-
-        public void setCleanupTask(CompletableFuture<Boolean> cleanupTask) {
-            this.cleanupTask = cleanupTask;
-        }
     }
 
     /**
      * Information about a loaded chunk
      */
+    @Data
     private static class LoadedChunkData {
         private boolean dirty;
-        private boolean busy;
-
-        public boolean isDirty() {
-            return dirty;
-        }
-
-        public void setDirty(boolean dirty) {
-            this.dirty = dirty;
-        }
-
-        public boolean isBusy() {
-            return busy;
-        }
-
-        public void setBusy(boolean busy) {
-            this.busy = busy;
-        }
     }
 }

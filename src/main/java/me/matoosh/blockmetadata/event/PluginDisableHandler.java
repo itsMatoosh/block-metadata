@@ -4,7 +4,9 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.java.Log;
 import me.matoosh.blockmetadata.BlockMetadataStorage;
 import me.matoosh.blockmetadata.exception.ChunkNotLoadedException;
+import org.bukkit.Bukkit;
 import org.bukkit.Chunk;
+import org.bukkit.World;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.server.PluginDisableEvent;
@@ -27,19 +29,15 @@ public class PluginDisableHandler<T extends Serializable> implements Listener {
 
     @EventHandler
     public void onWorldUnload(WorldUnloadEvent event) {
-        log.info("Saving metadata in world " + event.getWorld().getName());
-        for (Chunk c : event.getWorld().getLoadedChunks()) {
-            try {
-                storage.persistChunk(c);
-            } catch (ChunkNotLoadedException ignored) {
-            }
-        }
+        // save all chunks in the unloaded world
+        saveMetadataInWorld(event.getWorld());
     }
 
     @EventHandler
     public void onServerStop(PluginDisableEvent event)
             throws ExecutionException, InterruptedException {
-        log.info("Saving block metadata...");
+        // save metadata in each world
+        Bukkit.getWorlds().forEach(this::saveMetadataInWorld);
 
         // wait until all the data is saved
         Map<Chunk, CompletableFuture<Void>> savingChunks = storage.getSavingChunks();
@@ -49,5 +47,19 @@ public class PluginDisableHandler<T extends Serializable> implements Listener {
         }
         
         log.info("Block metadata saved successfully!");
+    }
+
+    /**
+     * Saves block metadata for all loaded chunks in the specified world.
+     * @param world The world for which to save block metadata.
+     */
+    private void saveMetadataInWorld(World world) {
+        log.info("Saving metadata in world " + world.getName());
+        for (Chunk c : world.getLoadedChunks()) {
+            try {
+                storage.persistChunk(c);
+            } catch (ChunkNotLoadedException ignored) {
+            }
+        }
     }
 }

@@ -303,23 +303,23 @@ public class BlockMetadataStorage<T extends Serializable> {
 
         // read file text
         return AsyncFiles.readAll(regionFile, 1024)
-                .thenApply(content -> {
-                    try {
-                        // parse file
-                        Map<String, Map<String, T>> data = mapper.readValue(
-                                content, new TypeReference<Map<String, Map<String, T>>>(){});
+            .thenApply(content -> {
+                try {
+                    // parse file
+                    Map<String, Map<String, T>> data = mapper.readValue(
+                            content, new TypeReference<Map<String, Map<String, T>>>(){});
 
-                        // buffer data
-                        if (task != null) {
-                            task.setBuffer(data);
-                            task.setBuffered(true);
-                        }
-
-                        return data;
-                    } catch (JsonProcessingException e) {
-                        throw new CompletionException(e);
+                    // buffer data
+                    if (task != null) {
+                        task.setBuffer(data);
+                        task.setBuffered(true);
                     }
-                });
+
+                    return data;
+                } catch (JsonProcessingException e) {
+                    throw new CompletionException(e);
+                }
+            });
     }
 
     /**
@@ -471,7 +471,7 @@ public class BlockMetadataStorage<T extends Serializable> {
                 }
             })
             .exceptionally((e) -> {
-                // not busy, loaded or dirty anymore
+                // not busy or loaded anymore
                 if (unload) {
                     loadedChunks.remove(chunk);
                 } else {
@@ -521,27 +521,16 @@ public class BlockMetadataStorage<T extends Serializable> {
      * @param chunk The chunk.
      */
     private CompletableFuture<Void> loadChunkAsync(Chunk chunk) {
-        // set busy
-        LoadedChunkData loadedChunkData = new LoadedChunkData();
-        loadedChunkData.setBusy(true);
-        loadedChunks.put(chunk, loadedChunkData);
-
         return CompletableFuture.supplyAsync(() -> {
             // get appropriate file
             return getRegionFile(chunk);
         })
             .thenCompose(this::readRegionData)
-            .exceptionally((e) -> {
-                // error loading chunk data
-                // not busy
-                e.printStackTrace();
-                return null;
-            })
             .thenAccept((data) -> {
                 // check if load was successful
                 if (data == null) {
                     // no data for this chunk
-                    loadedChunkData.setBusy(false);
+                    loadedChunks.put(chunk, new LoadedChunkData());
                     return;
                 }
 
@@ -552,8 +541,8 @@ public class BlockMetadataStorage<T extends Serializable> {
                     metadata.put(chunk, chunkData);
                 }
 
-                // not busy
-                loadedChunkData.setBusy(false);
+                // loaded
+                loadedChunks.put(chunk, new LoadedChunkData());
             });
     }
 
@@ -571,8 +560,10 @@ public class BlockMetadataStorage<T extends Serializable> {
         } catch (ChunkNotLoadedException e) {
             // load chunk first
             try {
+                if (!chunk.isLoaded()) {
+                    chunk.load();
+                }
                 loadChunk(chunk).get();
-                chunk.load();
             } catch (InterruptedException | ExecutionException | ChunkAlreadyLoadedException ex) {
                 // should not happen
                 e.printStackTrace();

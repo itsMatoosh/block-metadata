@@ -266,8 +266,8 @@ abstract class BlockMetadataStorageTest<T extends Serializable> {
         // start loading new chunk
         Chunk chunk = world.getChunkAt(1, 1);
         CompletableFuture<Void> loadFuture = blockMetadataStorage.loadChunk(chunk);
-        // chunk should be busy while loading
-        assertTrue(blockMetadataStorage.isChunkBusy(chunk) || loadFuture.isDone());
+        // chunk should not appear loaded while loading
+        assertTrue(!blockMetadataStorage.isChunkLoaded(chunk) || loadFuture.isDone());
         // finish loading
         loadFuture.get();
         // chunk should not be busy anymore
@@ -275,7 +275,7 @@ abstract class BlockMetadataStorageTest<T extends Serializable> {
 
         // start saving the chunk
         CompletableFuture<Void> saveFuture = blockMetadataStorage.persistChunk(chunk, false);
-        // chunk should be busy while loading
+        // chunk should be busy while saving
         assertTrue(blockMetadataStorage.isChunkBusy(chunk) || saveFuture.isDone());
         // finish loading
         saveFuture.get();

@@ -20,6 +20,7 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.*;
 
 abstract class BlockMetadataStorageTest<T extends Serializable> {
@@ -75,29 +76,27 @@ abstract class BlockMetadataStorageTest<T extends Serializable> {
     }
 
     @Test
-    void setGetMetadataAutoloadChunk() throws ChunkBusyException, ChunkNotLoadedException,
-            ExecutionException, InterruptedException {
+    void ensureChunkReadyAutoloadChunk() throws ChunkNotLoadedException, ExecutionException, InterruptedException, ChunkBusyException {
         // unload the sample chunk
         blockMetadataStorage.persistChunk(sampleChunk).get();
 
         // ensure chunk is not loaded
         assertFalse(blockMetadataStorage.isChunkLoaded(sampleChunk));
 
-        // set metadata on a block
-        T metadata = createMetadata();
-        blockMetadataStorage.setMetadata(sampleBlock, metadata);
+        // ensure chunk ready
+        blockMetadataStorage.ensureChunkReady(sampleChunk);
 
         // ensure chunk is loaded now
         assertTrue(blockMetadataStorage.isChunkLoaded(sampleChunk));
+    }
 
-        // unload the sample chunk
-        blockMetadataStorage.persistChunk(sampleChunk).get();
-
-        // retrieve the metadata
-        blockMetadataStorage.getMetadata(sampleBlock);
-
-        // ensure chunk is loaded now
+    @Test
+    void ensureChunkReadyChunkBusy() {
+        // ensure chunk is not loaded
         assertTrue(blockMetadataStorage.isChunkLoaded(sampleChunk));
+
+        // ensure chunk ready
+        assertDoesNotThrow(() -> blockMetadataStorage.ensureChunkReady(sampleChunk));
     }
 
     @Test
@@ -295,6 +294,6 @@ abstract class BlockMetadataStorageTest<T extends Serializable> {
         }
 
         // ensure keys are unique
-        assertEquals(16 * 16 * 256, keys.size());
+        assertThat(keys).hasSize(16 * 16 * 256);
     }
 }

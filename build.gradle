@@ -4,7 +4,7 @@ plugins {
 }
 
 group 'me.matoosh'
-version '1.2.5'
+version '1.2.7'
 
 repositories {
     maven {
@@ -24,7 +24,7 @@ dependencies {
     implementation group: 'com.fasterxml.jackson.core', name: 'jackson-databind', version: '2.12.3'
 
     // spigot
-    compileOnly 'org.spigotmc:spigot-api:1.16.5-R0.1-SNAPSHOT'
+    compileOnly 'org.spigotmc:spigot-api:1.17-R0.1-SNAPSHOT'
 
     // lombok
     compileOnly 'org.projectlombok:lombok:1.18.20'
@@ -42,6 +42,9 @@ dependencies {
     // mockito
     testImplementation "org.mockito:mockito-core:3.+"
     testImplementation "org.mockito:mockito-junit-jupiter:3.10.0"
+
+    // assertj
+    testImplementation 'org.assertj:assertj-core:3.20.2'
 }
 
 test {

@@ -31,6 +31,7 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
+import java.util.function.Function;
 
 /**
  * Service managing the storage of block metadata.
@@ -74,6 +75,24 @@ public class BlockMetadataStorage<T extends Serializable> {
      * The currently saving chunks.
      */
     private final Map<Chunk, CompletableFuture<Void>> savingChunks = new HashMap<>();
+
+    /**
+     * Delay before the chunk metadata clenup task is executed.
+     */
+    private final int CLEANUP_TASK_DELAY = 2500;
+
+    /**
+     * Cleanup task delay function.
+     */
+    private final Function<Void, Boolean> CLEANUP_DELAY = (t) -> {
+        // delay
+        try {
+            Thread.sleep(CLEANUP_TASK_DELAY);
+        } catch (InterruptedException e) {
+            return false;
+        }
+        return true;
+    };
 
     /**
      * Instantiates a new block metadata storage with automatic loading/saving.
@@ -254,24 +273,17 @@ public class BlockMetadataStorage<T extends Serializable> {
         }
 
         // append clean up task after the task is done
-        CompletableFuture<Boolean> cleanupTask = newTask.thenApplyAsync((t) -> {
-            // delay
-            try {
-                Thread.sleep(2000);
-            } catch (InterruptedException e) {
-                return false;
-            }
-            return true;
-        });
+        CompletableFuture<Boolean> cleanupTask = newTask.thenApplyAsync(CLEANUP_DELAY);
         CompletableFuture<Void> completeTask = cleanupTask
             .exceptionally((e) -> {
                 if (e instanceof CancellationException) {
+                    // cleanup task canceled, therefore not last in chain
                     return false;
                 }
                 throw new CompletionException(e);
             })
             .thenApply((lastInChain) -> {
-                // check if should continue
+                // check if we should continue
                 if (!lastInChain) {
                     return null;
                 }
@@ -323,7 +335,7 @@ public class BlockMetadataStorage<T extends Serializable> {
                 try {
                     // parse file
                     Map<String, Map<String, T>> data = mapper.readValue(
-                        content, new TypeReference<>() {
+                        content, new TypeReference<Map<String, Map<String, T>>>() {
                     });
 
                     // buffer data
@@ -430,10 +442,7 @@ public class BlockMetadataStorage<T extends Serializable> {
      * @param chunk The chunk to persist.
      */
     private CompletableFuture<Void> persistChunkAsync(@NonNull Chunk chunk) {
-        return CompletableFuture.supplyAsync(() -> {
-            // get appropriate file
-            return getRegionFile(chunk);
-        })
+        return CompletableFuture.supplyAsync(() -> getRegionFile(chunk))
             .thenCompose(this::readRegionData)
             .exceptionally((e) -> {
                 e.printStackTrace();
@@ -515,10 +524,7 @@ public class BlockMetadataStorage<T extends Serializable> {
      * @param chunk The chunk.
      */
     private CompletableFuture<Void> loadChunkAsync(@NonNull Chunk chunk) {
-        return CompletableFuture.supplyAsync(() -> {
-            // get appropriate file
-            return getRegionFile(chunk);
-        })
+        return CompletableFuture.supplyAsync(() -> getRegionFile(chunk))
             .thenCompose(this::readRegionData)
             .exceptionally((e) -> {
                 e.printStackTrace();

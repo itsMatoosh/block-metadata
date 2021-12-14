@@ -311,7 +311,7 @@ public class BlockMetadataStorage<T extends Serializable> {
         regionTask.setTask(newTask);
         regionTask.setCleanupTask(cleanupTask);
 
-        return completeTask;
+        return newTask;
     }
 
     /**

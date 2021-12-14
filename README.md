@@ -52,7 +52,7 @@ public class YourPlugin extends JavaPlugin {
 }
 ```
 ### Setting block metadata
-We can use the instantiated BlockMetadataStorage to store metadata on blocks. Metadata can only be stored on block that are in currently loaded chunks.
+We can use the instantiated BlockMetadataStorage to store metadata on blocks.
 ```java
 Block block = ...
 BlockMetadataStorage<String> metadataStorage = ...

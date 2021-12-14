@@ -10,7 +10,7 @@ public class BlockIntegerMetadataStorageTest extends BlockMetadataStorageTest<In
 
     @Override
     @BeforeEach
-    void setUp() throws java.util.concurrent.ExecutionException, InterruptedException, me.matoosh.blockmetadata.exception.ChunkAlreadyLoadedException, java.io.IOException {
+    void setUp() throws java.util.concurrent.ExecutionException, InterruptedException, java.io.IOException {
         random = new Random();
         super.setUp();
     }

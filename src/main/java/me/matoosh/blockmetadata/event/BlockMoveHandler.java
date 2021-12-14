@@ -2,7 +2,6 @@ package me.matoosh.blockmetadata.event;
 
 import lombok.RequiredArgsConstructor;
 import me.matoosh.blockmetadata.BlockMetadataStorage;
-import me.matoosh.blockmetadata.exception.ChunkBusyException;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
 import org.bukkit.event.EventHandler;
@@ -15,6 +14,7 @@ import java.io.Serializable;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutionException;
 
 /**
  * Handles preserving block metadata when moving blocks with a piston.
@@ -26,7 +26,7 @@ public class BlockMoveHandler<T extends Serializable> implements Listener {
     private final BlockMetadataStorage<T> storage;
 
     @EventHandler(priority = EventPriority.LOW)
-    public void onBlockPistonExtend(BlockPistonExtendEvent event) throws ChunkBusyException {
+    public void onBlockPistonExtend(BlockPistonExtendEvent event) throws ExecutionException, InterruptedException {
         if (event.isCancelled()) {
             return;
         }
@@ -34,7 +34,7 @@ public class BlockMoveHandler<T extends Serializable> implements Listener {
     }
 
     @EventHandler(priority = EventPriority.LOW)
-    public void onBlockPistonRetract(BlockPistonRetractEvent event) throws ChunkBusyException {
+    public void onBlockPistonRetract(BlockPistonRetractEvent event) throws ExecutionException, InterruptedException {
         if (event.isCancelled()) {
             return;
         }
@@ -46,14 +46,14 @@ public class BlockMoveHandler<T extends Serializable> implements Listener {
      * Preserves blocks' metadata.
      * @param blocks The blocks that were moved.
      * @param direction The direction in which the blocks were moved.
-     * @throws ChunkBusyException thrown if the chunk is busy.
      */
-    private void onBlocksMoveByPiston(List<Block> blocks, BlockFace direction) throws ChunkBusyException {
+    private void onBlocksMoveByPiston(List<Block> blocks, BlockFace direction)
+            throws ExecutionException, InterruptedException {
         // cache origin block metadata
         Map<Block, T> cachedMetadata = new HashMap<>();
         for (Block origin : blocks) {
             // remove block metadata
-            T metadata = storage.removeMetadata(origin);
+            T metadata = storage.removeMetadata(origin).get();
 
             // skip if no metadata stored
             if (metadata == null) {

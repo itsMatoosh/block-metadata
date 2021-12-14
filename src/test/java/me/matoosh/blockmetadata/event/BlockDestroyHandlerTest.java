@@ -5,7 +5,6 @@ import be.seeseemelk.mockbukkit.ServerMock;
 import be.seeseemelk.mockbukkit.WorldMock;
 import be.seeseemelk.mockbukkit.entity.PlayerMock;
 import me.matoosh.blockmetadata.BlockMetadataStorage;
-import me.matoosh.blockmetadata.exception.ChunkBusyException;
 import org.bukkit.block.Block;
 import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockBurnEvent;
@@ -49,7 +48,7 @@ class BlockDestroyHandlerTest<T extends Serializable> {
     }
 
     @Test
-    void onBlockDestroy() throws ChunkBusyException {
+    void onBlockDestroy() {
         PlayerMock player = server.addPlayer();
         blockDestroyHandler.onBlockDestroy(
                 new BlockBreakEvent(sampleBlock, player));
@@ -58,7 +57,7 @@ class BlockDestroyHandlerTest<T extends Serializable> {
     }
 
     @Test
-    void onBlockBurn() throws ChunkBusyException {
+    void onBlockBurn() {
         blockDestroyHandler.onBlockBurn(
                 new BlockBurnEvent(sampleBlock, null));
         verify(blockMetadataStorage, times(1))
@@ -66,7 +65,7 @@ class BlockDestroyHandlerTest<T extends Serializable> {
     }
 
     @Test
-    void onBlockFade() throws ChunkBusyException {
+    void onBlockFade() {
         blockDestroyHandler.onBlockFade(
                 new BlockFadeEvent(sampleBlock, sampleBlock.getState()));
         verify(blockMetadataStorage, times(1))
@@ -74,7 +73,7 @@ class BlockDestroyHandlerTest<T extends Serializable> {
     }
 
     @Test
-    void onEntityChangeBlock() throws ChunkBusyException {
+    void onEntityChangeBlock() {
         blockDestroyHandler.onEntityChangeBlock(
                 new EntityChangeBlockEvent(null, sampleBlock, sampleBlock.getBlockData()));
         verify(blockMetadataStorage, times(1))

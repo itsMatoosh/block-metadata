@@ -3,7 +3,6 @@ package me.matoosh.blockmetadata.event;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.java.Log;
 import me.matoosh.blockmetadata.BlockMetadataStorage;
-import me.matoosh.blockmetadata.exception.ChunkNotLoadedException;
 import org.bukkit.Bukkit;
 import org.bukkit.Chunk;
 import org.bukkit.World;
@@ -56,10 +55,7 @@ public class PluginDisableHandler<T extends Serializable> implements Listener {
     private void saveMetadataInWorld(World world) {
         log.info("Saving metadata in world " + world.getName());
         for (Chunk c : world.getLoadedChunks()) {
-            try {
-                storage.persistChunk(c);
-            } catch (ChunkNotLoadedException ignored) {
-            }
+            storage.persistChunk(c);
         }
     }
 }

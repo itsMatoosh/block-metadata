@@ -4,7 +4,6 @@ import be.seeseemelk.mockbukkit.MockBukkit;
 import be.seeseemelk.mockbukkit.ServerMock;
 import be.seeseemelk.mockbukkit.WorldMock;
 import me.matoosh.blockmetadata.BlockMetadataStorage;
-import me.matoosh.blockmetadata.exception.ChunkBusyException;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
 import org.bukkit.event.block.BlockPistonExtendEvent;
@@ -21,6 +20,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.stream.Stream;
 
 import static org.mockito.ArgumentMatchers.any;
@@ -59,11 +60,11 @@ abstract class BlockMoveHandlerTest<T extends Serializable> {
 
     @ParameterizedTest
     @MethodSource("directionGenerator")
-    void extendSingleBlock(BlockFace direction) throws ChunkBusyException {
+    void extendSingleBlock(BlockFace direction) throws ExecutionException, InterruptedException {
         // mock origin
         Block origin = pistonBlock.getRelative(direction);
         when(blockMetadataStorage.removeMetadata(origin))
-                .thenReturn(createSampleMetadata());
+                .thenReturn(CompletableFuture.completedFuture(createSampleMetadata()));
 
         // mock destination
         Block destination = origin.getRelative(direction);
@@ -81,11 +82,11 @@ abstract class BlockMoveHandlerTest<T extends Serializable> {
 
     @ParameterizedTest
     @MethodSource("directionGenerator")
-    void extendSingleBlockNoMetadata(BlockFace direction) throws ChunkBusyException {
+    void extendSingleBlockNoMetadata(BlockFace direction) throws ExecutionException, InterruptedException {
         // mock origin
         Block origin = pistonBlock.getRelative(direction);
         when(blockMetadataStorage.removeMetadata(origin))
-                .thenReturn(null);
+                .thenReturn(CompletableFuture.completedFuture(null));
 
         // fire the piston extend event
         List<Block> blocks = new ArrayList<>();
@@ -99,11 +100,11 @@ abstract class BlockMoveHandlerTest<T extends Serializable> {
 
     @ParameterizedTest
     @MethodSource("directionGenerator")
-    void retractSingleBlock(BlockFace direction) throws ChunkBusyException {
+    void retractSingleBlock(BlockFace direction) throws ExecutionException, InterruptedException {
         // mock origin
         Block origin = pistonBlock.getRelative(direction);
         when(blockMetadataStorage.removeMetadata(origin))
-                .thenReturn(createSampleMetadata());
+                .thenReturn(CompletableFuture.completedFuture(createSampleMetadata()));
 
         // mock destination
         Block destination = origin.getRelative(direction);
@@ -121,11 +122,11 @@ abstract class BlockMoveHandlerTest<T extends Serializable> {
 
     @ParameterizedTest
     @MethodSource("directionGenerator")
-    void retractSingleBlockNoMetadata(BlockFace direction) throws ChunkBusyException {
+    void retractSingleBlockNoMetadata(BlockFace direction) throws ExecutionException, InterruptedException {
         // mock origin
         Block origin = pistonBlock.getRelative(direction);
         when(blockMetadataStorage.removeMetadata(origin))
-                .thenReturn(null);
+                .thenReturn(CompletableFuture.completedFuture(null));
 
         // fire the piston extend event
         List<Block> blocks = new ArrayList<>();

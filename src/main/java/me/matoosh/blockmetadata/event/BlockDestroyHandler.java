@@ -2,7 +2,6 @@ package me.matoosh.blockmetadata.event;
 
 import lombok.RequiredArgsConstructor;
 import me.matoosh.blockmetadata.BlockMetadataStorage;
-import me.matoosh.blockmetadata.exception.ChunkBusyException;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
@@ -22,7 +21,7 @@ public class BlockDestroyHandler<T extends Serializable> implements Listener {
     private final BlockMetadataStorage<T> storage;
 
     @EventHandler(priority = EventPriority.LOW)
-    public void onBlockDestroy(BlockBreakEvent event) throws ChunkBusyException {
+    public void onBlockDestroy(BlockBreakEvent event) {
         if (event.isCancelled()) {
             return;
         }
@@ -30,7 +29,7 @@ public class BlockDestroyHandler<T extends Serializable> implements Listener {
     }
 
     @EventHandler(priority = EventPriority.LOW)
-    public void onEntityChangeBlock(EntityChangeBlockEvent event) throws ChunkBusyException {
+    public void onEntityChangeBlock(EntityChangeBlockEvent event) {
         if (event.isCancelled()) {
             return;
         }
@@ -38,7 +37,7 @@ public class BlockDestroyHandler<T extends Serializable> implements Listener {
     }
 
     @EventHandler(priority = EventPriority.LOW)
-    public void onBlockBurn(BlockBurnEvent event) throws ChunkBusyException {
+    public void onBlockBurn(BlockBurnEvent event) {
         if (event.isCancelled()) {
             return;
         }
@@ -46,7 +45,7 @@ public class BlockDestroyHandler<T extends Serializable> implements Listener {
     }
 
     @EventHandler(priority = EventPriority.LOW)
-    public void onBlockFade(BlockFadeEvent event) throws ChunkBusyException {
+    public void onBlockFade(BlockFadeEvent event) {
         if (event.isCancelled()) {
             return;
         }

@@ -12,9 +12,6 @@ import me.matoosh.blockmetadata.event.BlockDestroyHandler;
 import me.matoosh.blockmetadata.event.BlockMoveHandler;
 import me.matoosh.blockmetadata.event.ChunkLoadHandler;
 import me.matoosh.blockmetadata.event.PluginDisableHandler;
-import me.matoosh.blockmetadata.exception.ChunkAlreadyLoadedException;
-import me.matoosh.blockmetadata.exception.ChunkBusyException;
-import me.matoosh.blockmetadata.exception.ChunkNotLoadedException;
 import org.bukkit.Bukkit;
 import org.bukkit.Chunk;
 import org.bukkit.block.Block;
@@ -30,7 +27,6 @@ import java.util.Map;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
-import java.util.concurrent.ExecutionException;
 import java.util.function.Function;
 
 /**
@@ -131,113 +127,124 @@ public class BlockMetadataStorage<T extends Serializable> {
      * Get metadata of a block.
      * @param block The block.
      * @return Current metadata of the block. Null if no data stored.
-     * @throws ChunkBusyException Thrown if the chunk is busy.
      */
-    public T getMetadata(@NonNull Block block) throws ChunkBusyException {
+    public CompletableFuture<T> getMetadata(@NonNull Block block) {
         // get chunk
-        Map<String, T> metadata = getMetadataInChunk(block.getChunk());
-        if (metadata == null) {
-            // no data for this chunk
-            return null;
-        }
+        return getMetadataInChunk(block.getChunk()).thenApply((metadata) -> {
+            if (metadata == null) {
+                // no data for this chunk
+                return null;
+            }
 
-        // get block metadata
-        return metadata.get(getBlockKeyInChunk(block));
+            // get block metadata
+            return metadata.get(getBlockKeyInChunk(block));
+        });
     }
 
     /**
      * Set metadata of a block.
      * @param block The block.
-     * @param metadata Metadata to set to the block.
-     * @throws ChunkBusyException Thrown if the chunk is busy.
+     * @param data Metadata to set to the block.
      */
-    public void setMetadata(@NonNull Block block, T metadata) throws ChunkBusyException {
-        if (metadata == null) {
+    public CompletableFuture<Void> setMetadata(@NonNull Block block, T data) {
+        if (data == null) {
             // clear metadata
-            removeMetadata(block);
+            return removeMetadata(block).thenApply((s) -> null);
         } else {
             // set metadata
-            modifyMetadataInChunk(block.getChunk()).put(getBlockKeyInChunk(block), metadata);
+            return getMetadataInChunk(block.getChunk()).thenApply((d) -> {
+                // make sure theres a map to put data in
+                if (d == null) {
+                    d = new HashMap<>();
+                }
+                d.put(getBlockKeyInChunk(block), data);
+
+                // set chunk as dirty
+                LoadedChunkData loadedChunkData = loadedChunks.get(block.getChunk());
+                loadedChunkData.setDirty(true);
+
+                // update the data
+                metadata.put(block.getChunk(), d);
+
+                return null;
+            });
         }
     }
 
     /**
      * Removes metadata for a block.
      * @param block The block.
-     * @throws ChunkBusyException Thrown if the chunk is busy.
      * @return The removed metadata value. Null if no value was stored.
      */
-    public T removeMetadata(@NonNull Block block) throws ChunkBusyException {
-        // cache chunk
+    public CompletableFuture<T> removeMetadata(@NonNull Block block) {
         Chunk chunk = block.getChunk();
+        return getMetadataInChunk(chunk).thenApply((metadata) -> {
+            // no metadata in chunk
+            if (metadata == null) {
+                return null;
+            }
 
-        // check if there are durabilities in the chunk
-        if (!hasMetadataForChunk(chunk)) {
-            return null;
-        }
+            // remove metadata value from map
+            T value = metadata.remove(getBlockKeyInChunk(block));
 
-        // get chunk
-        Map<String, T> metadata = modifyMetadataInChunk(chunk);
+            // if this was the last one left remove metadata entry for this chunk
+            if (metadata.size() == 0) {
+                removeMetadataForChunk(chunk);
+            }
 
-        // remove from map
-        T value = metadata.remove(getBlockKeyInChunk(block));
-
-        // check if last value
-        if (metadata.size() < 1) {
-            // remove chunk from storage
-            removeMetadataForChunk(chunk);
-        }
-
-        return value;
+            return value;
+        });
     }
 
     /**
      * Checks whether there are metadata stored for a given chunk.
      * @param chunk The chunk to check.
      * @return Whether there are metadata stored for the given chunk.
-     * @throws ChunkBusyException Thrown if the chunk is busy.
      */
-    public boolean hasMetadataForChunk(@NonNull Chunk chunk) throws ChunkBusyException {
-        ensureChunkReady(chunk);
-        return metadata.containsKey(chunk);
+    public CompletableFuture<Boolean> hasMetadataForChunk(@NonNull Chunk chunk) {
+        return loadChunk(chunk).thenApply((s) -> metadata.containsKey(chunk));
     }
 
     /**
      * Removes all metadata stored for a given chunk.
      * @param chunk The chunk to remove metadata from.
-     * @throws ChunkBusyException Thrown if the chunk is busy.
      */
-    public void removeMetadataForChunk(@NonNull Chunk chunk) throws ChunkBusyException {
-        ensureChunkReady(chunk);
-        metadata.remove(chunk);
-        LoadedChunkData loadedChunkData = loadedChunks.get(chunk);
-        loadedChunkData.setDirty(true);
-    }
-
-    /**
-     * Gets metadata of blocks in a chunk to be modified.
-     * Sets the chunk as dirty.
-     * @param chunk The chunk in which the metadata are.
-     * @return Map of metadata.
-     * @throws ChunkBusyException Thrown if the chunk is busy.
-     */
-    public Map<String, T> modifyMetadataInChunk(@NonNull Chunk chunk) throws ChunkBusyException {
-        ensureChunkReady(chunk);
-        Map<String, T> data = metadata.computeIfAbsent(chunk, k -> new HashMap<>());
-        LoadedChunkData loadedChunkData = loadedChunks.get(chunk);
-        loadedChunkData.setDirty(true);
-        return data;
+    public CompletableFuture<Map<String, T>> removeMetadataForChunk(@NonNull Chunk chunk) {
+        return loadChunk(chunk).thenRun(() -> {
+            // set chunk as dirty
+            LoadedChunkData loadedChunkData = loadedChunks.get(chunk);
+            loadedChunkData.setDirty(true);
+        }).thenApply((s) -> metadata.remove(chunk));
     }
 
     /**
      * Gets metadata of blocks in a chunk.
      * @param chunk The chunk in which the metadata are.
      * @return Map of metadata.
-     * @throws ChunkBusyException Thrown if the chunk is busy.
      */
-    public Map<String, T> getMetadataInChunk(@NonNull Chunk chunk) throws ChunkBusyException {
-        ensureChunkReady(chunk);
-        return metadata.get(chunk);
+    public CompletableFuture<Map<String, T>> getMetadataInChunk(@NonNull Chunk chunk) {
+        return loadChunk(chunk).thenApply((s) -> metadata.get(chunk));
+    }
+
+
+    /**
+     * Sets all the data in a given chunk to the specified data.
+     * @param chunk The chunk for which to set metadata.
+     * @param data The metadata map.
+     */
+    public CompletableFuture<Void> setMetadataInChunk(@NonNull Chunk chunk, Map<String, T> data) {
+        return loadChunk(chunk).thenRun(() -> {
+            // set chunk as dirt
+            LoadedChunkData loadedChunkData = loadedChunks.get(chunk);
+            loadedChunkData.setDirty(true);
+
+            // update the data
+            if (data == null || data.size() == 0) {
+                metadata.remove(chunk);
+            } else {
+                metadata.put(chunk, data);
+            }
+        });
     }
 
     /**
@@ -358,7 +365,7 @@ public class BlockMetadataStorage<T extends Serializable> {
      * @return The number of bytes that were written to disk.
      */
     private CompletableFuture<Void> bufferRegionData(
-            @NonNull Path regionFile, @NonNull Map<String, Map<String, T>> data) {
+            @NonNull Path regionFile, Map<String, Map<String, T>> data) {
         RegionTask regionTask = busyRegions.get(regionFile);
         if (regionTask != null) {
             regionTask.setBuffer(data);
@@ -376,7 +383,7 @@ public class BlockMetadataStorage<T extends Serializable> {
      * @return The number of bytes that were written to disk.
      */
     private CompletableFuture<Void> writeRegionData(
-            @NonNull Path regionFile, @NonNull Map<String, Map<String, T>> data) {
+            @NonNull Path regionFile, Map<String, Map<String, T>> data) {
         // remove old file to overwrite
         return CompletableFuture.supplyAsync(() -> {
             try {
@@ -385,6 +392,9 @@ public class BlockMetadataStorage<T extends Serializable> {
                 return false;
             }
         }).thenApply((s) -> {
+            // remove empty region files
+            if (data == null) return null;
+
             // serialize to yaml
             try {
                 return mapper.writeValueAsString(data);
@@ -401,8 +411,7 @@ public class BlockMetadataStorage<T extends Serializable> {
      * Persists metadata of specified chunks on disk.
      * @param chunks Chunks to persist metadata for.
      */
-    public CompletableFuture<Void> persistChunks(Chunk... chunks)
-            throws ChunkNotLoadedException {
+    public CompletableFuture<Void> persistChunks(Chunk... chunks) {
         CompletableFuture<Void>[] tasks = new CompletableFuture[chunks.length];
         for (int i = 0; i < chunks.length; i++) {
             tasks[i] = persistChunk(chunks[i]);
@@ -413,10 +422,8 @@ public class BlockMetadataStorage<T extends Serializable> {
     /**
      * Persists chunk metadata on disk and unloads the metadata from memory.
      * @param chunk The chunk to persist.
-     * @throws ChunkNotLoadedException Thrown if the chunk isn't loaded.
      */
-    public CompletableFuture<Void> persistChunk(@NonNull Chunk chunk)
-            throws ChunkNotLoadedException {
+    public CompletableFuture<Void> persistChunk(@NonNull Chunk chunk) {
         // check if chunk dirty
         if (!isChunkDirty(chunk)) {
             // not dirty, nothing to save to disk
@@ -488,8 +495,7 @@ public class BlockMetadataStorage<T extends Serializable> {
      * Loads chunk metadata for each specified chunk.
      * @param chunks Chunks to load metadata for.
      */
-    public CompletableFuture<Void> loadChunks(Chunk... chunks)
-            throws ChunkAlreadyLoadedException {
+    public CompletableFuture<Void> loadChunks(Chunk... chunks) {
         CompletableFuture<Void>[] tasks = new CompletableFuture[chunks.length];
         for (int i = 0; i < chunks.length; i++) {
             tasks[i] = loadChunk(chunks[i]);
@@ -501,10 +507,10 @@ public class BlockMetadataStorage<T extends Serializable> {
      * Loads chunk metadata into memory.
      * @param chunk The chunk.
      */
-    public CompletableFuture<Void> loadChunk(@NonNull Chunk chunk) throws ChunkAlreadyLoadedException {
+    public CompletableFuture<Void> loadChunk(@NonNull Chunk chunk) {
         // check if chunk loaded
         if (isChunkLoaded(chunk)) {
-            throw new ChunkAlreadyLoadedException();
+            return CompletableFuture.completedFuture(null);
         }
 
         // check if chunk is already loading
@@ -551,31 +557,6 @@ public class BlockMetadataStorage<T extends Serializable> {
     }
 
     /**
-     * Ensures that a chunk is ready to be interacted with.
-     * Loads chunk if not loaded.
-     * @param chunk The chunk.
-     * @throws ChunkBusyException Thrown if the chunk is busy.
-     */
-    public void ensureChunkReady(@NonNull Chunk chunk) throws ChunkBusyException {
-        // ensure chunk is loaded
-        if (!isChunkLoaded(chunk)) {
-            // load chunk first
-            try {
-                loadChunk(chunk).get();
-                if (!chunk.isLoaded()) {
-                    chunk.load();
-                }
-            } catch (InterruptedException | ExecutionException | ChunkAlreadyLoadedException ex) {
-                // should not happen
-                ex.printStackTrace();
-            }
-        } else if (isChunkBusy(chunk)) {
-            // ensure chunk is not busy
-            throw new ChunkBusyException();
-        }
-    }
-
-    /**
      * Checks whether the specified chunk is busy.
      * A chunk is busy if it's being saved.
      * @param chunk The chunk.
@@ -610,10 +591,10 @@ public class BlockMetadataStorage<T extends Serializable> {
      * @param chunk The chunk.
      * @return Whether the chunk is dirty.
      */
-    public boolean isChunkDirty(Chunk chunk) throws ChunkNotLoadedException {
+    public boolean isChunkDirty(Chunk chunk) {
         LoadedChunkData loadedChunkData = loadedChunks.get(chunk);
         if (loadedChunkData == null) {
-            throw new ChunkNotLoadedException();
+            return false;
         }
         return loadedChunkData.isDirty();
     }

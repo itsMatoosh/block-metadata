@@ -21,14 +21,18 @@ public class ChunkLoadHandler<T extends Serializable> implements Listener {
     private final BlockMetadataStorage<T> storage;
 
     @EventHandler
-    public void onChunkLoad(ChunkLoadEvent event)
-            throws ChunkAlreadyLoadedException {
-        storage.loadChunk(event.getChunk());
+    public void onChunkLoad(ChunkLoadEvent event) {
+        try {
+            storage.loadChunk(event.getChunk());
+        } catch (ChunkAlreadyLoadedException ignored) {
+        }
     }
 
     @EventHandler
-    public void onChunkUnload(ChunkUnloadEvent event)
-            throws ChunkNotLoadedException {
-        storage.persistChunk(event.getChunk());
+    public void onChunkUnload(ChunkUnloadEvent event) {
+        try {
+            storage.persistChunk(event.getChunk());
+        } catch (ChunkNotLoadedException ignored) {
+        }
     }
 }

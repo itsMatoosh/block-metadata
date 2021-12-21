@@ -12,7 +12,7 @@ repositories {
 }
 
 dependencies {
-	implementation 'com.github.itsMatoosh:block-metadata:1.4.1'
+	implementation 'com.github.itsMatoosh:block-metadata:1.5.0'
 }
 ```
 ### Adding Block Metadata by Maven
@@ -28,7 +28,7 @@ Modify your pom.xml file to include the following:
 <dependency>
     <groupId>com.github.itsMatoosh</groupId>
     <artifactId>block-metadata</artifactId>
-    <version>1.4.1</version>
+    <version>1.5.0</version>
 </dependency>
 ```
 

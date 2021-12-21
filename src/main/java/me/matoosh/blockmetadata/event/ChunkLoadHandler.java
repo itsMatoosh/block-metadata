@@ -2,6 +2,7 @@ package me.matoosh.blockmetadata.event;
 
 import lombok.RequiredArgsConstructor;
 import me.matoosh.blockmetadata.BlockMetadataStorage;
+import me.matoosh.blockmetadata.ChunkInfo;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.world.ChunkUnloadEvent;
@@ -19,6 +20,6 @@ public class ChunkLoadHandler<T extends Serializable> implements Listener {
 
     @EventHandler
     public void onChunkUnload(ChunkUnloadEvent event) {
-        storage.persistChunk(event.getChunk());
+        storage.unloadChunk(ChunkInfo.fromChunk(event.getChunk()));
     }
 }

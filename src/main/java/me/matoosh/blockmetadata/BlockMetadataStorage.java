@@ -5,6 +5,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import lombok.Data;
+import lombok.Getter;
 import lombok.NonNull;
 import lombok.extern.java.Log;
 import me.matoosh.blockmetadata.async.AsyncFiles;
@@ -23,17 +24,21 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
-import java.util.concurrent.CancellationException;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
-import java.util.function.Function;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.stream.Collectors;
 
 /**
  * Service managing the storage of block metadata.
  * @param <T> The type of metadata to store.
  */
 @Log
+@Getter
 public class BlockMetadataStorage<T extends Serializable> {
 
     /**
@@ -42,53 +47,14 @@ public class BlockMetadataStorage<T extends Serializable> {
     private final Path dataPath;
 
     /**
-     * Currently loaded metadata of each block grouped by chunk.
+     * Currently loaded regions.
      */
-    private final Map<Chunk, Map<String, T>> metadata = new HashMap<>();
-
-    /**
-     * Regions that are currently being loaded/persisted and their load futures.
-     */
-    private final Map<Path, RegionTask> busyRegions = new HashMap<>();
-
-    /**
-     * Chunks that are currently loaded.
-     */
-    private final Map<Chunk, LoadedChunkData> loadedChunks = new HashMap<>();
+    private final Map<String, Region> regions = new HashMap<>();
 
     /**
      * YAML data file mapper.
      */
     private final ObjectMapper mapper = new ObjectMapper(new YAMLFactory());
-
-    /**
-     * The currently loading chunks.
-     * Prevents double loads.
-     */
-    private final Map<Chunk, CompletableFuture<Void>> loadingChunks = new HashMap<>();
-
-    /**
-     * The currently saving chunks.
-     */
-    private final Map<Chunk, CompletableFuture<Void>> savingChunks = new HashMap<>();
-
-    /**
-     * Delay before the chunk metadata clenup task is executed.
-     */
-    private final int CLEANUP_TASK_DELAY = 2500;
-
-    /**
-     * Cleanup task delay function.
-     */
-    private final Function<Void, Boolean> CLEANUP_DELAY = (t) -> {
-        // delay
-        try {
-            Thread.sleep(CLEANUP_TASK_DELAY);
-        } catch (InterruptedException e) {
-            return false;
-        }
-        return true;
-    };
 
     /**
      * Instantiates a new block metadata storage with automatic loading/saving.
@@ -130,7 +96,8 @@ public class BlockMetadataStorage<T extends Serializable> {
      */
     public CompletableFuture<T> getMetadata(@NonNull Block block) {
         // get chunk
-        return getMetadataInChunk(block.getChunk()).thenApply((metadata) -> {
+        return getMetadataInChunk(ChunkInfo.fromChunk(block.getChunk()))
+        .thenApply((metadata) -> {
             if (metadata == null) {
                 // no data for this chunk
                 return null;
@@ -152,22 +119,19 @@ public class BlockMetadataStorage<T extends Serializable> {
             return removeMetadata(block).thenApply((s) -> null);
         } else {
             // set metadata
-            return getMetadataInChunk(block.getChunk()).thenApply((d) -> {
-                // make sure theres a map to put data in
+            ChunkInfo chunkInfo = ChunkInfo.fromChunk(block.getChunk());
+            return getMetadataInChunk(chunkInfo)
+            .thenApply((d) -> {
+                // make sure there's a map to put data in
                 if (d == null) {
                     d = new HashMap<>();
                 }
+
+                // insert data
                 d.put(getBlockKeyInChunk(block), data);
 
-                // set chunk as dirty
-                LoadedChunkData loadedChunkData = loadedChunks.get(block.getChunk());
-                loadedChunkData.setDirty(true);
-
-                // update the data
-                metadata.put(block.getChunk(), d);
-
-                return null;
-            });
+                return d;
+            }).thenCompose((d) -> setMetadataInChunk(chunkInfo, d));
         }
     }
 
@@ -177,141 +141,138 @@ public class BlockMetadataStorage<T extends Serializable> {
      * @return The removed metadata value. Null if no value was stored.
      */
     public CompletableFuture<T> removeMetadata(@NonNull Block block) {
-        Chunk chunk = block.getChunk();
-        return getMetadataInChunk(chunk).thenApply((metadata) -> {
+        // get chunk
+        ChunkInfo chunkInfo = ChunkInfo.fromChunk(block.getChunk());
+
+        // get and remove value from the metadata
+        CompletableFuture<T> valueFuture = getMetadataInChunk(chunkInfo)
+        .thenApply((metadata) -> {
             // no metadata in chunk
             if (metadata == null) {
                 return null;
             }
 
-            // remove metadata value from map
-            T value = metadata.remove(getBlockKeyInChunk(block));
-
-            // if this was the last one left remove metadata entry for this chunk
-            if (metadata.size() == 0) {
-                removeMetadataForChunk(chunk);
-            }
-
-            return value;
+            // get metadata value from the map
+            return metadata.remove(getBlockKeyInChunk(block));
         });
+        // if no metadata remaining in chunk, remove chunk section
+        CompletableFuture<Void> removeChunkFuture = valueFuture.thenCompose((s) -> getMetadataInChunk(chunkInfo))
+                .thenApply((data) -> data != null && data.size() == 0)
+                .thenCompose((removeChunk) -> removeChunk
+                        ? removeMetadataForChunk(chunkInfo).thenApply((s) -> null)
+                        : CompletableFuture.completedFuture(null));
+        // wait until chunk section is removed before continuing
+        return valueFuture.thenCombine(removeChunkFuture, (val, n) -> val);
     }
 
     /**
      * Checks whether there are metadata stored for a given chunk.
-     * @param chunk The chunk to check.
+     * @param chunkInfo Information about the chunk.
      * @return Whether there are metadata stored for the given chunk.
      */
-    public CompletableFuture<Boolean> hasMetadataForChunk(@NonNull Chunk chunk) {
-        return loadChunk(chunk).thenApply((s) -> metadata.containsKey(chunk));
+    public CompletableFuture<Boolean> hasMetadataForChunk(@NonNull ChunkInfo chunkInfo) {
+        return getRegion(chunkInfo).thenApply((
+                region -> region != null && region.getBuffer() != null
+                        && region.getBuffer().containsKey(getChunkKey(chunkInfo.getCoordinates()))));
     }
 
     /**
      * Removes all metadata stored for a given chunk.
-     * @param chunk The chunk to remove metadata from.
+     * @param chunkInfo Information about the chunk.
      */
-    public CompletableFuture<Map<String, T>> removeMetadataForChunk(@NonNull Chunk chunk) {
-        return loadChunk(chunk).thenRun(() -> {
-            // set chunk as dirty
-            LoadedChunkData loadedChunkData = loadedChunks.get(chunk);
-            loadedChunkData.setDirty(true);
-        }).thenApply((s) -> metadata.remove(chunk));
+    public CompletableFuture<Map<String, T>> removeMetadataForChunk(@NonNull ChunkInfo chunkInfo) {
+        CompletableFuture<Map<String, T>> valueFuture = getRegion(chunkInfo).thenApply((region) -> {
+            // check if buffer exists
+            if (region.getBuffer() == null) {
+                return null;
+            }
+            // remove metadata
+            Map<String, T> metadata = region.getBuffer().remove(getChunkKey(chunkInfo.getCoordinates()));
+            if (metadata != null) {
+                // set region as dirty
+                region.setDirty(true);
+                return metadata;
+            } else {
+                return null;
+            }
+        });
+        CompletableFuture<Void> removeRegionFuture = valueFuture.thenCompose((s) -> getRegion(chunkInfo))
+            .thenAccept((region) -> {
+                if (region != null && region.getBuffer().size() == 0) {
+                    region.setBuffer(null);
+                }
+            });
+        return valueFuture.thenCombine(removeRegionFuture, (val, n) -> val);
     }
 
     /**
      * Gets metadata of blocks in a chunk.
-     * @param chunk The chunk in which the metadata are.
+     * @param chunkInfo Information about the chunk.
      * @return Map of metadata.
      */
-    public CompletableFuture<Map<String, T>> getMetadataInChunk(@NonNull Chunk chunk) {
-        return loadChunk(chunk).thenApply((s) -> metadata.get(chunk));
+    public CompletableFuture<Map<String, T>> getMetadataInChunk(@NonNull ChunkInfo chunkInfo) {
+        return getRegion(chunkInfo).thenApply((region) -> region.getBuffer() != null
+                ? region.getBuffer().get(getChunkKey(chunkInfo.getCoordinates()))
+                : null);
+    }
+
+    /**
+     * Resolves a region asynchronously.
+     * @param chunkInfo Information about the chunk.
+     * @return The region data future.
+     */
+    public CompletableFuture<Region> getRegion(@NonNull ChunkInfo chunkInfo) {
+        // get region
+        String regionKey = getRegionKey(chunkInfo);
+        Region region = regions.get(regionKey);
+        if (region == null) {
+            // buffer region
+            Path regionPath = getRegionFile(chunkInfo);
+            Region newRegion = new Region(regionKey, regionPath);
+            regions.put(newRegion.getKey(), newRegion);
+
+            // load region
+            ExecutorService regionExeService = Executors.newSingleThreadExecutor();
+            CompletableFuture<Void> loadFuture = loadRegion(newRegion.getFilePath(), regionExeService)
+                    .thenAccept(newRegion::setBuffer);
+            newRegion.setLoadFuture(loadFuture);
+
+            // wait until region loads
+            return newRegion.getLoadFuture().thenApply((d) -> newRegion);
+        } else {
+            // wait until region loads
+            return region.getLoadFuture().thenApply((d) -> region);
+        }
     }
 
 
     /**
      * Sets all the data in a given chunk to the specified data.
-     * @param chunk The chunk for which to set metadata.
+     * @param chunkInfo Information about the chunk.
      * @param data The metadata map.
      */
-    public CompletableFuture<Void> setMetadataInChunk(@NonNull Chunk chunk, Map<String, T> data) {
-        return loadChunk(chunk).thenRun(() -> {
-            // set chunk as dirt
-            LoadedChunkData loadedChunkData = loadedChunks.get(chunk);
-            loadedChunkData.setDirty(true);
-
+    public CompletableFuture<Void> setMetadataInChunk(@NonNull ChunkInfo chunkInfo, Map<String, T> data) {
+        return getRegion(chunkInfo).thenAccept((region) -> {
             // update the data
+            String chunkKey = getChunkKey(chunkInfo.getCoordinates());
             if (data == null || data.size() == 0) {
-                metadata.remove(chunk);
+                // remove the chunk data
+                Map<String, T> removed = region.getBuffer().remove(chunkKey);
+                if (removed != null) {
+                    // set region as dirty
+                    region.setDirty(true);
+                }
             } else {
-                metadata.put(chunk, data);
+                // ensure buffer exists
+                if (region.getBuffer() == null) {
+                    region.setBuffer(new HashMap<>());
+                }
+                region.getBuffer().put(chunkKey, data);
+
+                // set region as dirty
+                region.setDirty(true);
             }
         });
-    }
-
-    /**
-     * Schedules a region task.
-     * Region tasks are executed asynchronously,
-     * but only 1 task can run for a single region
-     * at any time.
-     * @param chunk Chunk which is in the region which we want to schedule a task for.
-     * @param task The task to be scheduled.
-     * @return Future of the task.
-     */
-    private CompletableFuture<Void> scheduleRegionTask(
-            @NonNull Chunk chunk, @NonNull java.util.function.Function
-            <Void, ? extends CompletableFuture<Void>> task) {
-        // get region task
-        Path regionFile = getRegionFile(chunk);
-        RegionTask regionTask = busyRegions.computeIfAbsent(regionFile, k -> new RegionTask());
-
-        // cancel last region cleanup task
-        if (regionTask.getCleanupTask() != null) {
-            regionTask.getCleanupTask().cancel(true);
-        }
-
-        // set this future as the latest future for the region
-        // schedule operation
-        CompletableFuture<Void> newTask;
-        if (regionTask.getTask() != null) {
-            // append future and run it on the same tread as last one
-            newTask = regionTask.getTask().thenCompose(task);
-        } else {
-            // first future in the chain
-            newTask = task.apply(null);
-        }
-
-        // append clean up task after the task is done
-        CompletableFuture<Boolean> cleanupTask = newTask.thenApplyAsync(CLEANUP_DELAY);
-        CompletableFuture<Void> completeTask = cleanupTask
-            .exceptionally((e) -> {
-                if (e instanceof CancellationException) {
-                    // cleanup task canceled, therefore not last in chain
-                    return false;
-                }
-                throw new CompletionException(e);
-            })
-            .thenApply((lastInChain) -> {
-                // check if we should continue
-                if (!lastInChain) {
-                    return null;
-                }
-
-                // there is no task scheduled after this one for now because this one wasn't cancelled
-                busyRegions.remove(regionFile);
-                // clear the region record and commit if the buffer was modified
-                if (regionTask.isDirty()) {
-                    return regionTask.getBuffer();
-                } else {
-                    return null;
-                }
-            })
-            .thenCompose((data) -> data != null
-            ? writeRegionData(regionFile, data) : CompletableFuture.completedFuture(null));
-
-        // set new task
-        regionTask.setTask(newTask);
-        regionTask.setCleanupTask(cleanupTask);
-
-        return newTask;
     }
 
     /**
@@ -325,12 +286,6 @@ public class BlockMetadataStorage<T extends Serializable> {
             return CompletableFuture.completedFuture(null);
         }
 
-        // check if region is buffered
-        RegionTask task = busyRegions.get(regionFile);
-        if (task != null && task.isBuffered()) {
-            return CompletableFuture.completedFuture(task.getBuffer());
-        }
-
         // check if file exists
         if (!Files.exists(regionFile)) {
             return CompletableFuture.completedFuture(null);
@@ -341,40 +296,13 @@ public class BlockMetadataStorage<T extends Serializable> {
             .thenApply(content -> {
                 try {
                     // parse file
-                    Map<String, Map<String, T>> data = mapper.readValue(
+                    return mapper.readValue(
                         content, new TypeReference<Map<String, Map<String, T>>>() {
                     });
-
-                    // buffer data
-                    if (task != null) {
-                        task.setBuffer(data);
-                        task.setBuffered(true);
-                    }
-
-                    return data;
                 } catch (JsonProcessingException e) {
                     throw new CompletionException(e);
                 }
             });
-    }
-
-    /**
-     * Writes the region data to the buffer.
-     * Buffered region data will be written to disk at the end of each region chain.
-     * @param regionFile Path to the region file.
-     * @return The number of bytes that were written to disk.
-     */
-    private CompletableFuture<Void> bufferRegionData(
-            @NonNull Path regionFile, Map<String, Map<String, T>> data) {
-        RegionTask regionTask = busyRegions.get(regionFile);
-        if (regionTask != null) {
-            regionTask.setBuffer(data);
-            regionTask.setBuffered(true);
-            regionTask.setDirty(true);
-            return CompletableFuture.completedFuture(null);
-        } else {
-            return writeRegionData(regionFile, data);
-        }
     }
 
     /**
@@ -408,94 +336,20 @@ public class BlockMetadataStorage<T extends Serializable> {
     }
 
     /**
-     * Persists metadata of specified chunks on disk.
-     * @param chunks Chunks to persist metadata for.
+     * Loads chunk metadata into memory.
+     * @param chunkInfo Information about the chunk.
      */
-    public CompletableFuture<Void> persistChunks(Chunk... chunks) {
-        CompletableFuture<Void>[] tasks = new CompletableFuture[chunks.length];
-        for (int i = 0; i < chunks.length; i++) {
-            tasks[i] = persistChunk(chunks[i]);
-        }
-        return CompletableFuture.allOf(tasks);
-    }
-
-    /**
-     * Persists chunk metadata on disk and unloads the metadata from memory.
-     * @param chunk The chunk to persist.
-     */
-    public CompletableFuture<Void> persistChunk(@NonNull Chunk chunk) {
-        // check if chunk dirty
-        if (!isChunkDirty(chunk)) {
-            // not dirty, nothing to save to disk
-            loadedChunks.remove(chunk);
-
-            return CompletableFuture.completedFuture(null);
-        }
-
-        // check if chunk is already being persisted
-        if (savingChunks.containsKey(chunk)) {
-            return savingChunks.get(chunk);
-        }
-
-        // save chunk asynchronously
-        CompletableFuture<Void> future = scheduleRegionTask(chunk, (s) -> persistChunkAsync(chunk))
-                .thenRun(() -> savingChunks.remove(chunk));
-        savingChunks.put(chunk, future);
-        return future;
-    }
-
-    /**
-     * Persists chunk metadata on disk asynchronously.
-     * @param chunk The chunk to persist.
-     */
-    private CompletableFuture<Void> persistChunkAsync(@NonNull Chunk chunk) {
-        return CompletableFuture.supplyAsync(() -> getRegionFile(chunk))
-            .thenCompose(this::readRegionData)
-            .exceptionally((e) -> {
-                e.printStackTrace();
-                return null;
-            })
-            .thenApply((data) -> {
-                // get chunk data
-                Map<String, T> chunkMetadata = metadata.remove(chunk);
-                loadedChunks.remove(chunk);
-
-                // update data
-                String chunkSection = getChunkKey(chunk);
-                if (data != null) {
-                    // metadata already stored for this region, append
-                    if (chunkMetadata == null || chunkMetadata.size() == 0) {
-                        // no metadata to save for this chunk, remove entry from region
-                        data.remove(chunkSection);
-                    } else {
-                        // update metadata for this chunk
-                        data.put(chunkSection, chunkMetadata);
-                    }
-                } else if (chunkMetadata != null) {
-                    // no metadata stored for this region yet, create new map
-                    data = new HashMap<>();
-                    data.put(chunkSection, chunkMetadata);
-                }
-
-                // delete empty region files
-                if (data != null && data.size() == 0) {
-                    data = null;
-                }
-
-                return data;
-            })
-            .thenCompose((data) -> bufferRegionData(getRegionFile(chunk), data))
-            .exceptionally((e) -> {
-                e.printStackTrace();
-                return null;
-            });
+    public CompletableFuture<Void> loadChunk(ChunkInfo chunkInfo) {
+        // add chunk as active in its region
+        // possibly load region file if not loaded already
+        return getRegion(chunkInfo).thenAccept((region) -> region.addActiveChunk(chunkInfo.getCoordinates()));
     }
 
     /**
      * Loads chunk metadata for each specified chunk.
      * @param chunks Chunks to load metadata for.
      */
-    public CompletableFuture<Void> loadChunks(Chunk... chunks) {
+    public CompletableFuture<Void> loadChunks(ChunkInfo... chunks) {
         CompletableFuture<Void>[] tasks = new CompletableFuture[chunks.length];
         for (int i = 0; i < chunks.length; i++) {
             tasks[i] = loadChunk(chunks[i]);
@@ -504,99 +358,165 @@ public class BlockMetadataStorage<T extends Serializable> {
     }
 
     /**
-     * Loads chunk metadata into memory.
-     * @param chunk The chunk.
+     * Unloads chunk metadata from memory.
+     * @param chunkInfo Information about the chunk.
      */
-    public CompletableFuture<Void> loadChunk(@NonNull Chunk chunk) {
-        // check if chunk loaded
-        if (isChunkLoaded(chunk)) {
-            return CompletableFuture.completedFuture(null);
-        }
-
-        // check if chunk is already loading
-        if (loadingChunks.containsKey(chunk)) {
-            return loadingChunks.get(chunk);
-        }
-
-        // load chunk asynchronously
-        CompletableFuture<Void> future = scheduleRegionTask(chunk, (s) -> loadChunkAsync(chunk))
-                .thenRun(() -> loadingChunks.remove(chunk));
-        loadingChunks.put(chunk, future);
-        return future;
+    public CompletableFuture<Void> unloadChunk(@NonNull ChunkInfo chunkInfo) {
+        // remove chunk from active chunks in the region
+        // possibly persist region
+        return getRegion(chunkInfo)
+                .thenApply((region) -> region.removeActiveChunk(chunkInfo.getCoordinates()))
+                .thenCompose((activeChunks) -> activeChunks == 0
+                        ? saveRegion(regions.get(getRegionKey(chunkInfo)))
+                        : CompletableFuture.completedFuture(null));
     }
 
     /**
-     * Loads chunk metadata into memory synchronously.
-     * @param chunk The chunk.
+     * Persists metadata of specified chunks on disk.
+     * @param chunks Chunks to persist metadata for.
      */
-    private CompletableFuture<Void> loadChunkAsync(@NonNull Chunk chunk) {
-        return CompletableFuture.supplyAsync(() -> getRegionFile(chunk))
-            .thenCompose(this::readRegionData)
-            .exceptionally((e) -> {
-                e.printStackTrace();
-                return null;
-            })
-            .thenAccept((data) -> {
-                // check if load was successful
-                if (data == null) {
-                    // no data for this chunk
-                    loadedChunks.put(chunk, new LoadedChunkData());
-                    return;
-                }
-
-                // load
-                String chunkSection = getChunkKey(chunk);
-                Map<String, T> chunkData = data.get(chunkSection);
-                if (chunkData != null) {
-                    metadata.put(chunk, chunkData);
-                }
-
-                // loaded
-                loadedChunks.put(chunk, new LoadedChunkData());
-            });
+    public CompletableFuture<Void> unloadChunks(ChunkInfo... chunks) {
+        CompletableFuture<Void>[] tasks = new CompletableFuture[chunks.length];
+        for (int i = 0; i < chunks.length; i++) {
+            tasks[i] = unloadChunk(chunks[i]);
+        }
+        return CompletableFuture.allOf(tasks);
     }
 
     /**
      * Checks whether the specified chunk is busy.
      * A chunk is busy if it's being saved.
-     * @param chunk The chunk.
+     * @param chunkInfo Information about the chunk.
      * @return Whether the chunk is busy.
      */
-    public boolean isChunkBusy(Chunk chunk) {
-        return savingChunks.containsKey(chunk);
+    public boolean isChunkSaving(@NonNull ChunkInfo chunkInfo) {
+        Region region = regions.get(getRegionKey(chunkInfo));
+        return region != null && region.getSaveFuture() != null && !region.getSaveFuture().isDone();
     }
 
     /**
      * Checks whether the specified chunk is loading.
-     * @param chunk The chunk.
+     * @param chunkInfo Information about the chunk.
      * @return Whether the chunk is loading.
      */
-    public boolean isChunkLoading(Chunk chunk) {
-        return loadingChunks.containsKey(chunk);
+    public boolean isChunkLoading(@NonNull ChunkInfo chunkInfo) {
+        Region region = regions.get(getRegionKey(chunkInfo));
+        return region != null && !region.getLoadFuture().isDone();
     }
 
     /**
      * Checks whether the specified chunk is loaded.
-     * @param chunk The chunk.
+     * @param chunkInfo Information about the chunk.
      * @return Whether the chunk is loaded.
      */
-    public boolean isChunkLoaded(Chunk chunk) {
-        LoadedChunkData loadedChunkData = loadedChunks.get(chunk);
-        return loadedChunkData != null;
+    public boolean isChunkLoaded(@NonNull ChunkInfo chunkInfo) {
+        Region region = regions.get(getRegionKey(chunkInfo));
+        return region != null && region.getLoadFuture().isDone();
     }
 
     /**
      * Checks whether the specified chunk is dirty.
      * A chunk is dirty if it has been modified since is was loaded into memory.
-     * @param chunk The chunk.
+     * @param chunkInfo Information about the chunk.
      * @return Whether the chunk is dirty.
      */
-    public boolean isChunkDirty(Chunk chunk) {
-        LoadedChunkData loadedChunkData = loadedChunks.get(chunk);
-        if (loadedChunkData == null) {
-            return false;
+    public boolean isChunkDirty(@NonNull ChunkInfo chunkInfo) {
+        Region region = regions.get(getRegionKey(chunkInfo));
+        return region != null && region.isDirty();
+    }
+
+    /**
+     * Loads region metadata into memory synchronously.
+     * @param regionPath Path to the region file.
+     * @param executorService Executor service to use.
+     */
+    private CompletableFuture<Map<String, Map<String, T>>> loadRegion(
+            @NonNull Path regionPath, @NonNull ExecutorService executorService) {
+        return CompletableFuture.supplyAsync(() -> regionPath, executorService)
+            // read region file
+            .thenCompose(this::readRegionData)
+            // if there was an error reading, print it
+            .exceptionally((e) -> {
+                e.printStackTrace();
+                return null;
+            });
+    }
+
+    /**
+     * Saves and unloads all loaded regions.
+     * @return
+     */
+    public CompletableFuture<Void> saveAllLoadedRegions() {
+        CompletableFuture<Void>[] saves = new CompletableFuture[regions.size()];
+        for (int i = 0; i < regions.size(); i++) {
+            saves[i] = saveRegion(regions.get(i));
         }
-        return loadedChunkData.isDirty();
+        return CompletableFuture.allOf(saves);
+    }
+
+    /**
+     * Saves region metadata on disk and unloads the metadata from memory.
+     * @param region The region to save.
+     */
+    public CompletableFuture<Void> saveRegion(@NonNull Region region) {
+        // check if chunk is already being persisted
+        if (region.getSaveFuture() != null) {
+            return region.getSaveFuture();
+        }
+
+        // ensure region is dirty
+        if (!region.isDirty()) {
+            // not dirty, nothing to save to disk
+            regions.remove(region.getKey());
+            region.setSaveFuture(region.getLoadFuture());
+            return region.getSaveFuture();
+        }
+
+        // save region asynchronously
+        CompletableFuture<Void> saveFuture = region.getLoadFuture()
+                .thenCompose((s) -> writeRegionData(region.getFilePath(), region.getBuffer()))
+                .thenRun(() -> regions.remove(region.getKey()));
+        region.setSaveFuture(saveFuture);
+        return region.getSaveFuture();
+    }
+
+    /**
+     * Get the currently loading regions.
+     * @return List of all currently loading regions.
+     */
+    public Set<Region> getLoadingRegions() {
+        return regions.values().stream()
+                .filter((region) -> !region.getLoadFuture().isDone())
+                .collect(Collectors.toSet());
+    }
+
+    /**
+     * Get the currently saving regions.
+     * @return List of all currently saving regions.
+     */
+    public Set<Region> getSavingRegions() {
+        return regions.values().stream()
+                .filter((region -> region.getSaveFuture() != null && !region.getSaveFuture().isDone()))
+                .collect(Collectors.toSet());
+    }
+
+    /**
+     * Get a key unique to a region in which a chunk is located.
+     * @param chunkInfo Information about the chunk.
+     * @return The region key.
+     */
+    private static String getRegionKey(@NonNull ChunkInfo chunkInfo) {
+        return chunkInfo.getWorld() + "_" + (chunkInfo.getCoordinates().getX() / 16)
+                + "_" + (chunkInfo.getCoordinates().getZ() / 16);
+    }
+
+    /**
+     * Get file name under which a region file should be saved.
+     * @param chunkInfo Information about the chunk.
+     * @return The file name.
+     */
+    private Path getRegionFile(@NonNull ChunkInfo chunkInfo) {
+        return dataPath.resolve(getRegionKey(chunkInfo) + ".yml");
     }
 
     /**
@@ -604,7 +524,7 @@ public class BlockMetadataStorage<T extends Serializable> {
      * @param block The block for which to get the key.
      * @return The key.
      */
-    public static String getBlockKeyInChunk(Block block) {
+    public static String getBlockKeyInChunk(@NonNull Block block) {
         Chunk chunk = block.getChunk();
         return getBlockKeyInChunk(
                 block.getX() - chunk.getX() * 16,
@@ -625,86 +545,67 @@ public class BlockMetadataStorage<T extends Serializable> {
 
     /**
      * Get a key unique to a chunk within a metadata region file.
-     * @param chunk The chunk.
+     * @param coordinates Coordinates of the chunk.
      * @return The chunk key.
      */
-    private String getChunkKey(Chunk chunk) {
-        return chunk.getX() + "," + chunk.getZ();
+    private static String getChunkKey(@NonNull ChunkCoordinates coordinates) {
+        return coordinates.getX() + "," + coordinates.getZ();
     }
 
-    /**
-     * Get file name under which a region file should be saved.
-     * @param chunk The chunk in the saved region.
-     * @return The file name.
-     */
-    private Path getRegionFile(Chunk chunk) {
-        return dataPath.resolve(chunk.getWorld().getName() + "_" + getRegionKey(chunk) + ".yml");
-    }
-
-    /**
-     * Get a key unique to a region in which a chunk is located.
-     * @param chunk The chunk in the region.
-     * @return The region key.
-     */
-    private String getRegionKey(Chunk chunk) {
-        return (chunk.getX() / 16) + "_" + (chunk.getZ() / 16);
-    }
-
-    /**
-     * Get the currently loading chunks.
-     * @return List of all currently loading chunks and their futures.
-     */
-    public Map<Chunk, CompletableFuture<Void>> getLoadingChunks() {
-        return loadingChunks;
-    }
-
-    /**
-     * Get the currently saving chunks.
-     * @return List of all currently saving chunks and their futures.
-     */
-    public Map<Chunk, CompletableFuture<Void>> getSavingChunks() {
-        return savingChunks;
-    }
 
     /**
      * Represents a metadata task on a region.
      */
     @Data
-    private class RegionTask {
+    private class Region {
         /**
-         * Future of the task that is currently running on the region.
+         * Region key.
          */
-        private CompletableFuture<Void> task;
+        private final String key;
         /**
-         * Task which cleans up the task's buffer and commits the region metadata
-         * to disk if it was modified. This is scheduled 2 seconds after the currently
-         * running task future. If a new task is scheduled before the 2 seconds,
-         * this cleanup task will be cancelled.
+         * Region file path.
          */
-        private CompletableFuture<Boolean> cleanupTask;
+        private final Path filePath;
         /**
-         * Buffered metadata for the blocks within the region.
-         * Use of the buffer speeds up processing.
-         * The buffer is committed to disk after a chain of operations on
-         * the region is finished.
+         * Currently active chunks in this region.
+         */
+        private final Set<String> activeChunks = new HashSet<>();
+
+        /**
+         * Future loading the current region.
+         */
+        private CompletableFuture<Void> loadFuture;
+        /**
+         * Future saving the current region.
+         */
+        private CompletableFuture<Void> saveFuture;
+        /**
+         * The buffer of this region.
          */
         private Map<String, Map<String, T>> buffer;
         /**
          * Whether the metadata for this region has been modified.
          */
         private boolean dirty;
-        /**
-         * Whether the metadata for this region is buffered.
-         * If true, the metadata is stored in the buffer variable.
-         */
-        private boolean buffered;
-    }
 
-    /**
-     * Information about a loaded chunk
-     */
-    @Data
-    private static class LoadedChunkData {
-        private boolean dirty;
+        /**
+         * Adds an active chunk.
+         * @param coordinates Coordinates of the chunk.
+         * @return The number of active chunks.
+         */
+        public int addActiveChunk(@NonNull ChunkCoordinates coordinates) {
+            activeChunks.add(getChunkKey(coordinates));
+            return activeChunks.size();
+        }
+
+        /**
+         * Removes an active chunk.
+         * @param coordinates Coordinates of the chunk.
+         * @return The number of active chunks.
+         */
+        public int removeActiveChunk(@NonNull ChunkCoordinates coordinates) {
+            activeChunks.remove(getChunkKey(coordinates));
+            return activeChunks.size();
+        }
     }
 }

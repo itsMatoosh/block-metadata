@@ -448,8 +448,10 @@ public class BlockMetadataStorage<T extends Serializable> {
      */
     public CompletableFuture<Void> saveAllLoadedRegions() {
         CompletableFuture<Void>[] saves = new CompletableFuture[regions.size()];
-        for (int i = 0; i < regions.size(); i++) {
-            saves[i] = saveRegion(regions.get(i));
+        int i = 0;
+        for (Region region : regions.values()) {
+            saves[i] = saveRegion(region);
+            i++;
         }
         return CompletableFuture.allOf(saves);
     }

@@ -12,7 +12,7 @@ repositories {
 }
 
 dependencies {
-	implementation 'com.github.itsMatoosh:block-metadata:1.5.0'
+	implementation 'com.github.itsMatoosh:block-metadata:1.5.1'
 }
 ```
 ### Adding Block Metadata by Maven
@@ -28,7 +28,7 @@ Modify your pom.xml file to include the following:
 <dependency>
     <groupId>com.github.itsMatoosh</groupId>
     <artifactId>block-metadata</artifactId>
-    <version>1.5.0</version>
+    <version>1.5.1</version>
 </dependency>
 ```
 
@@ -63,12 +63,18 @@ We can use the instantiated BlockMetadataStorage to fetch metadata from blocks.
 ```java
 Block block = ...
 BlockMetadataStorage<String> metadataStorage = ...
-String data = metadataStorage.getMetadata(block);
+metadataStorage.getMetadata(block).thenAccept(data -> {
+    // do something with the metadata
+    ...
+})
 ```
 ### Clearing block metadata
 We can use the instantiated BlockMetadataStorage to clear metadata from blocks.
 ```java
 Block block = ...
 BlockMetadataStorage<String> metadataStorage = ...
-String data = metadataStorage.removeMetadata(block);
+metadataStorage.removeMetadata(block).thenAccept(data -> {
+    // do something with the removed metadata
+    ...    
+});
 ```

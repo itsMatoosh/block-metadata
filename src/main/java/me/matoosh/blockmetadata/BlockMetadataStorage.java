@@ -24,10 +24,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.*;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.*;
 import java.util.stream.Collectors;
 
 /**
@@ -359,13 +356,21 @@ public class BlockMetadataStorage<T extends Serializable> {
      * @param chunkInfo Information about the chunk.
      */
     public CompletableFuture<Void> unloadChunk(@NonNull ChunkInfo chunkInfo) {
-        // remove chunk from active chunks in the region
-        // possibly persist region
-        return getRegion(chunkInfo)
-                .thenApply((region) -> region.removeActiveChunk(chunkInfo.getCoordinates()))
-                .thenCompose((activeChunks) -> activeChunks == 0
-                        ? saveRegion(regions.get(getRegionKey(chunkInfo)))
-                        : CompletableFuture.completedFuture(null));
+        // dont unload if chunk not loaded
+        String regionKey = getRegionKey(chunkInfo);
+        if (!regions.containsKey(regionKey)) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        // get the region
+        Region region = regions.get(regionKey);
+
+        // remove active chunk from region
+        return region.getLoadFuture()
+            .thenApply(c -> region.removeActiveChunk(chunkInfo.getCoordinates()))
+            .thenCompose((activeChunks) -> activeChunks == 0
+                    ? saveRegion(regions.get(getRegionKey(chunkInfo)))
+                    : CompletableFuture.completedFuture(null));
     }
 
     /**
@@ -437,26 +442,6 @@ public class BlockMetadataStorage<T extends Serializable> {
                 e.printStackTrace();
                 return null;
             });
-    }
-
-    /**
-     * Saves and unloads all loaded regions.
-     * @return
-     */
-    public CompletableFuture<Void> saveAllLoadedRegions() {
-        // copy region references
-        List<Region> toSave = new ArrayList<>(regions.size());
-        toSave.addAll(regions.values());
-
-        // save all
-        CompletableFuture<Void>[] futures = new CompletableFuture[toSave.size()];
-        int i = 0;
-        for (Region r : toSave) {
-            futures[i++] = saveRegion(r);
-        }
-
-        // wait for all to save
-        return CompletableFuture.allOf(futures);
     }
 
     /**

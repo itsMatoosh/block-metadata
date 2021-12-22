@@ -3,6 +3,10 @@ package me.matoosh.blockmetadata.event;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.java.Log;
 import me.matoosh.blockmetadata.BlockMetadataStorage;
+import me.matoosh.blockmetadata.ChunkInfo;
+import org.bukkit.Bukkit;
+import org.bukkit.Chunk;
+import org.bukkit.World;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.server.PluginDisableEvent;
@@ -23,8 +27,12 @@ public class PluginDisableHandler<T extends Serializable> implements Listener {
     @EventHandler
     public void onServerStop(PluginDisableEvent event)
             throws ExecutionException, InterruptedException {
-        // save all loaded regions and wait until all data is saved
-        storage.saveAllLoadedRegions().get();
+        // force unload each chunk
+        for (World world : Bukkit.getWorlds()) {
+            for (Chunk chunk : world.getLoadedChunks()) {
+                storage.unloadChunk(ChunkInfo.fromChunk(chunk)).get();
+            }
+        }
 
         log.info("Block metadata saved successfully!");
     }

@@ -23,10 +23,7 @@ import java.io.Serializable;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutorService;
@@ -447,13 +444,19 @@ public class BlockMetadataStorage<T extends Serializable> {
      * @return
      */
     public CompletableFuture<Void> saveAllLoadedRegions() {
-        CompletableFuture<Void>[] saves = new CompletableFuture[regions.size()];
+        // copy region references
+        List<Region> toSave = new ArrayList<>(regions.size());
+        toSave.addAll(regions.values());
+
+        // save all
+        CompletableFuture<Void>[] futures = new CompletableFuture[toSave.size()];
         int i = 0;
-        for (Region region : regions.values()) {
-            saves[i] = saveRegion(region);
-            i++;
+        for (Region r : toSave) {
+            futures[i++] = saveRegion(r);
         }
-        return CompletableFuture.allOf(saves);
+
+        // wait for all to save
+        return CompletableFuture.allOf(futures);
     }
 
     /**

@@ -1,6 +1,8 @@
 package me.matoosh.blockmetadata;
 
 import be.seeseemelk.mockbukkit.*;
+import me.matoosh.blockmetadata.entity.chunkinfo.BlockChunkCoordinates;
+import me.matoosh.blockmetadata.entity.chunkinfo.ChunkInfo;
 import org.bukkit.Chunk;
 import org.bukkit.block.Block;
 import org.junit.jupiter.api.AfterEach;
@@ -11,13 +13,10 @@ import java.io.IOException;
 import java.io.Serializable;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.HashSet;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 
-import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.*;
 
 abstract class BlockMetadataStorageTest<T extends Serializable> {
@@ -75,7 +74,7 @@ abstract class BlockMetadataStorageTest<T extends Serializable> {
     @Test
     void ensureChunkReadyAutoloadChunk() throws ExecutionException, InterruptedException {
         // unload the sample chunk
-        blockMetadataStorage.unloadChunk(sampleChunkInfo).get();
+        blockMetadataStorage.saveChunk(sampleChunkInfo, true).get();
 
         // ensure chunk is not loaded
         assertFalse(blockMetadataStorage.isChunkLoaded(sampleChunkInfo));
@@ -147,13 +146,12 @@ abstract class BlockMetadataStorageTest<T extends Serializable> {
         assertTrue(blockMetadataStorage.isChunkDirty(sampleChunkInfo));
 
         // get metadata
-        Map<String, T> retrievedMetadata = blockMetadataStorage.getMetadataInChunk(sampleChunkInfo).get();
+        Map<BlockChunkCoordinates, T> retrievedMetadata = blockMetadataStorage.getMetadataInChunk(sampleChunkInfo).get();
 
         // make sure only 1 block is set with metadata
         assertEquals(1, retrievedMetadata.size());
         // ensure the block we set metadata for is in the map
-        assertTrue(retrievedMetadata.containsKey(BlockMetadataStorage
-                .getBlockKeyInChunk(sampleBlock)));
+        assertTrue(retrievedMetadata.containsKey(BlockChunkCoordinates.fromBlock(sampleBlock)));
 
         // remove metadata from block
         blockMetadataStorage.removeMetadata(sampleBlock).get();
@@ -172,12 +170,11 @@ abstract class BlockMetadataStorageTest<T extends Serializable> {
         blockMetadataStorage.setMetadata(sampleBlock, metadata).get();
 
         // get metadata
-        Map<String, T> retrievedMetadata = blockMetadataStorage.getMetadataInChunk(sampleChunkInfo).get();
+        Map<BlockChunkCoordinates, T> retrievedMetadata = blockMetadataStorage.getMetadataInChunk(sampleChunkInfo).get();
         // make sure only 1 block is set with metadata
         assertEquals(1, retrievedMetadata.size());
         // ensure the block we set metadata for is in the map
-        assertTrue(retrievedMetadata.containsKey(BlockMetadataStorage
-                .getBlockKeyInChunk(sampleBlock)));
+        assertTrue(retrievedMetadata.containsKey(BlockChunkCoordinates.fromBlock(sampleBlock)));
 
         // remove metadata from block
         blockMetadataStorage.removeMetadata(sampleBlock).get();
@@ -187,7 +184,7 @@ abstract class BlockMetadataStorageTest<T extends Serializable> {
     }
 
     @Test
-    void persistChunk() throws ExecutionException, InterruptedException {
+    void saveChunk() throws ExecutionException, InterruptedException {
         // load sample chunk
         blockMetadataStorage.loadChunk(sampleChunkInfo).get();
 
@@ -257,27 +254,12 @@ abstract class BlockMetadataStorageTest<T extends Serializable> {
         assertFalse(blockMetadataStorage.isChunkSaving(chunkInfo));
 
         // start saving the chunk
-        CompletableFuture<Void> saveFuture = blockMetadataStorage.unloadChunk(chunkInfo);
+        CompletableFuture<Void> saveFuture = blockMetadataStorage.saveChunk(chunkInfo, false);
         // chunk should be busy while saving
         assertTrue(blockMetadataStorage.isChunkSaving(chunkInfo) || saveFuture.isDone());
         // finish loading
         saveFuture.get();
         // chunk should not be busy anymore
         assertFalse(blockMetadataStorage.isChunkSaving(chunkInfo));
-    }
-
-    @Test
-    void getBlockKeyInChunkUnique() {
-        Set<String> keys = new HashSet<>();
-        for (int i = 0; i < 16; i++) {
-            for (int j = 0; j < 16; j++) {
-                for (int k = 0; k < 256; k++) {
-                    keys.add(BlockMetadataStorage.getBlockKeyInChunk(i, j, k));
-                }
-            }
-        }
-
-        // ensure keys are unique
-        assertThat(keys).hasSize(16 * 16 * 256);
     }
 }

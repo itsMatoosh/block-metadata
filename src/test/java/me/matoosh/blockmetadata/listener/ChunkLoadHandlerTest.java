@@ -1,9 +1,9 @@
-package me.matoosh.blockmetadata.event;
+package me.matoosh.blockmetadata.listener;
 
 import be.seeseemelk.mockbukkit.ChunkMock;
 import be.seeseemelk.mockbukkit.WorldMock;
 import me.matoosh.blockmetadata.BlockMetadataStorage;
-import me.matoosh.blockmetadata.ChunkInfo;
+import me.matoosh.blockmetadata.entity.chunkinfo.ChunkInfo;
 import org.bukkit.Material;
 import org.bukkit.event.world.ChunkUnloadEvent;
 import org.junit.jupiter.api.Test;
@@ -39,6 +39,6 @@ abstract class ChunkLoadHandlerTest<T extends Serializable> {
 
         // assert that the chunk unload caused metadata unload
         verify(blockMetadataStorage, times(1))
-                .unloadChunk(ChunkInfo.fromChunk(sampleChunk));
+                .saveChunk(ChunkInfo.fromChunk(sampleChunk), true);
     }
 }

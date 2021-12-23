@@ -3,18 +3,20 @@ package me.matoosh.blockmetadata;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.module.SimpleModule;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import lombok.Data;
 import lombok.Getter;
 import lombok.NonNull;
 import lombok.extern.java.Log;
 import me.matoosh.blockmetadata.async.AsyncFiles;
-import me.matoosh.blockmetadata.event.BlockDestroyHandler;
-import me.matoosh.blockmetadata.event.BlockMoveHandler;
-import me.matoosh.blockmetadata.event.ChunkLoadHandler;
-import me.matoosh.blockmetadata.event.PluginDisableHandler;
+import me.matoosh.blockmetadata.entity.chunkinfo.*;
+import me.matoosh.blockmetadata.event.RegionUnloadEvent;
+import me.matoosh.blockmetadata.listener.BlockDestroyHandler;
+import me.matoosh.blockmetadata.listener.BlockMoveHandler;
+import me.matoosh.blockmetadata.listener.ChunkLoadHandler;
+import me.matoosh.blockmetadata.listener.PluginDisableHandler;
 import org.bukkit.Bukkit;
-import org.bukkit.Chunk;
 import org.bukkit.block.Block;
 import org.bukkit.plugin.java.JavaPlugin;
 
@@ -23,8 +25,14 @@ import java.io.Serializable;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
-import java.util.*;
-import java.util.concurrent.*;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
 
 /**
@@ -64,6 +72,16 @@ public class BlockMetadataStorage<T extends Serializable> {
         }
         this.dataPath = dataPath;
 
+        // add custom key serializers to the json mapper
+        SimpleModule module = new SimpleModule();
+        // configure chunk coordinate key mapping
+        module.addKeySerializer(ChunkCoordinates.class, new ChunkCoordinatesSerializer());
+        module.addKeyDeserializer(ChunkCoordinates.class, new ChunkCoordinatesDeserializer());
+        // configure block coordinate key mapping
+        module.addKeySerializer(BlockChunkCoordinates.class, new BlockChunkCoordinatesSerializer());
+        module.addKeyDeserializer(BlockChunkCoordinates.class, new BlockChunkCoordinatesDeserializer());
+        mapper.registerModule(module);
+
         // automatically manage metadata loading/saving
         Bukkit.getPluginManager().registerEvents(
                 new ChunkLoadHandler<>(this), plugin);
@@ -89,16 +107,27 @@ public class BlockMetadataStorage<T extends Serializable> {
      * @return Current metadata of the block. Null if no data stored.
      */
     public CompletableFuture<T> getMetadata(@NonNull Block block) {
+        return getMetadata(ChunkInfo.fromChunk(block.getChunk()),
+                BlockChunkCoordinates.fromBlock(block));
+    }
+
+    /**
+     * Get metadata of a block.
+     * @param chunkInfo Info about the chunk in which the block lies.
+     * @param blockChunkCoordinates The coordinates of the block within a chunk.
+     * @return Current metadata of the block. Null if no data stored.
+     */
+    public CompletableFuture<T> getMetadata(@NonNull ChunkInfo chunkInfo,
+                                            @NonNull BlockChunkCoordinates blockChunkCoordinates) {
         // get chunk
-        return getMetadataInChunk(ChunkInfo.fromChunk(block.getChunk()))
-        .thenApply((metadata) -> {
+        return getMetadataInChunk(chunkInfo).thenApply((metadata) -> {
             if (metadata == null) {
                 // no data for this chunk
                 return null;
             }
 
             // get block metadata
-            return metadata.get(getBlockKeyInChunk(block));
+            return metadata.get(blockChunkCoordinates);
         });
     }
 
@@ -108,12 +137,25 @@ public class BlockMetadataStorage<T extends Serializable> {
      * @param data Metadata to set to the block.
      */
     public CompletableFuture<Void> setMetadata(@NonNull Block block, T data) {
+        return setMetadata(ChunkInfo.fromChunk(block.getChunk()),
+                BlockChunkCoordinates.fromBlock(block), data);
+    }
+
+    /**
+     * Set metadata of a block.
+     * @param chunkInfo Info about the chunk where the block is located.
+     * @param blockChunkCoordinates Coordinates of the block within a chunk.
+     * @param data Metadata to set to the block.
+     */
+    public CompletableFuture<Void> setMetadata(@NonNull ChunkInfo chunkInfo,
+                                               @NonNull BlockChunkCoordinates blockChunkCoordinates,
+                                               T data) {
         if (data == null) {
             // clear metadata
-            return removeMetadata(block).thenApply((s) -> null);
+            return removeMetadata(chunkInfo, blockChunkCoordinates)
+                    .thenApply((s) -> null);
         } else {
             // set metadata
-            ChunkInfo chunkInfo = ChunkInfo.fromChunk(block.getChunk());
             return getMetadataInChunk(chunkInfo)
             .thenApply((d) -> {
                 // make sure there's a map to put data in
@@ -122,7 +164,7 @@ public class BlockMetadataStorage<T extends Serializable> {
                 }
 
                 // insert data
-                d.put(getBlockKeyInChunk(block), data);
+                d.put(blockChunkCoordinates, data);
 
                 return d;
             }).thenCompose((d) -> setMetadataInChunk(chunkInfo, d));
@@ -135,9 +177,18 @@ public class BlockMetadataStorage<T extends Serializable> {
      * @return The removed metadata value. Null if no value was stored.
      */
     public CompletableFuture<T> removeMetadata(@NonNull Block block) {
-        // get chunk
-        ChunkInfo chunkInfo = ChunkInfo.fromChunk(block.getChunk());
+        return removeMetadata(ChunkInfo.fromChunk(block.getChunk()),
+                BlockChunkCoordinates.fromBlock(block));
+    }
 
+    /**
+     * Removes metadata for a block.
+     * @param chunkInfo Info about the chunk where the block is located.
+     * @param blockChunkCoordinates Coordinates of the block within a chunk.
+     * @return The removed metadata value. Null if no value was stored.
+     */
+    public CompletableFuture<T> removeMetadata(@NonNull ChunkInfo chunkInfo,
+                                               @NonNull BlockChunkCoordinates blockChunkCoordinates) {
         // get and remove value from the metadata
         CompletableFuture<T> valueFuture = getMetadataInChunk(chunkInfo)
         .thenApply((metadata) -> {
@@ -147,7 +198,7 @@ public class BlockMetadataStorage<T extends Serializable> {
             }
 
             // get metadata value from the map
-            return metadata.remove(getBlockKeyInChunk(block));
+            return metadata.remove(blockChunkCoordinates);
         });
         // if no metadata remaining in chunk, remove chunk section
         CompletableFuture<Void> removeChunkFuture = valueFuture.thenCompose((s) -> getMetadataInChunk(chunkInfo))
@@ -167,21 +218,21 @@ public class BlockMetadataStorage<T extends Serializable> {
     public CompletableFuture<Boolean> hasMetadataForChunk(@NonNull ChunkInfo chunkInfo) {
         return getRegion(chunkInfo).thenApply((
                 region -> region != null && region.getBuffer() != null
-                        && region.getBuffer().containsKey(getChunkKey(chunkInfo.getCoordinates()))));
+                        && region.getBuffer().containsKey(chunkInfo.getCoordinates())));
     }
 
     /**
      * Removes all metadata stored for a given chunk.
      * @param chunkInfo Information about the chunk.
      */
-    public CompletableFuture<Map<String, T>> removeMetadataForChunk(@NonNull ChunkInfo chunkInfo) {
-        CompletableFuture<Map<String, T>> valueFuture = getRegion(chunkInfo).thenApply((region) -> {
+    public CompletableFuture<Map<BlockChunkCoordinates, T>> removeMetadataForChunk(@NonNull ChunkInfo chunkInfo) {
+        CompletableFuture<Map<BlockChunkCoordinates, T>> valueFuture = getRegion(chunkInfo).thenApply((region) -> {
             // check if buffer exists
             if (region.getBuffer() == null) {
                 return null;
             }
             // remove metadata
-            Map<String, T> metadata = region.getBuffer().remove(getChunkKey(chunkInfo.getCoordinates()));
+            Map<BlockChunkCoordinates, T> metadata = region.getBuffer().remove(chunkInfo.getCoordinates());
             if (metadata != null) {
                 // set region as dirty
                 region.setDirty(true);
@@ -204,9 +255,9 @@ public class BlockMetadataStorage<T extends Serializable> {
      * @param chunkInfo Information about the chunk.
      * @return Map of metadata.
      */
-    public CompletableFuture<Map<String, T>> getMetadataInChunk(@NonNull ChunkInfo chunkInfo) {
+    public CompletableFuture<Map<BlockChunkCoordinates, T>> getMetadataInChunk(@NonNull ChunkInfo chunkInfo) {
         return getRegion(chunkInfo).thenApply((region) -> region.getBuffer() != null
-                ? region.getBuffer().get(getChunkKey(chunkInfo.getCoordinates()))
+                ? region.getBuffer().get(chunkInfo.getCoordinates())
                 : null);
     }
 
@@ -222,7 +273,7 @@ public class BlockMetadataStorage<T extends Serializable> {
         if (region == null) {
             // buffer region
             Path regionPath = getRegionFile(chunkInfo);
-            Region newRegion = new Region(regionKey, regionPath);
+            Region newRegion = new Region(regionKey, chunkInfo.getWorld(), regionPath);
             regions.put(newRegion.getKey(), newRegion);
 
             // load region
@@ -245,13 +296,13 @@ public class BlockMetadataStorage<T extends Serializable> {
      * @param chunkInfo Information about the chunk.
      * @param data The metadata map.
      */
-    public CompletableFuture<Void> setMetadataInChunk(@NonNull ChunkInfo chunkInfo, Map<String, T> data) {
+    public CompletableFuture<Void> setMetadataInChunk(@NonNull ChunkInfo chunkInfo, Map<BlockChunkCoordinates, T> data) {
         return getRegion(chunkInfo).thenAccept((region) -> {
             // update the data
-            String chunkKey = getChunkKey(chunkInfo.getCoordinates());
             if (data == null || data.size() == 0) {
                 // remove the chunk data
-                Map<String, T> removed = region.getBuffer().remove(chunkKey);
+                Map<BlockChunkCoordinates, T> removed = region.getBuffer().remove(
+                        chunkInfo.getCoordinates());
                 if (removed != null) {
                     // set region as dirty
                     region.setDirty(true);
@@ -261,7 +312,7 @@ public class BlockMetadataStorage<T extends Serializable> {
                 if (region.getBuffer() == null) {
                     region.setBuffer(new HashMap<>());
                 }
-                region.getBuffer().put(chunkKey, data);
+                region.getBuffer().put(chunkInfo.getCoordinates(), data);
 
                 // set region as dirty
                 region.setDirty(true);
@@ -274,7 +325,7 @@ public class BlockMetadataStorage<T extends Serializable> {
      * @param regionFile Path to the region file.
      * @return Map of region metadata.
      */
-    private CompletableFuture<Map<String, Map<String, T>>> readRegionData(Path regionFile) {
+    private CompletableFuture<Map<ChunkCoordinates, Map<BlockChunkCoordinates, T>>> readRegionData(Path regionFile) {
         // no file to read
         if (regionFile == null) {
             return CompletableFuture.completedFuture(null);
@@ -290,9 +341,8 @@ public class BlockMetadataStorage<T extends Serializable> {
             .thenApply(content -> {
                 try {
                     // parse file
-                    return mapper.readValue(
-                        content, new TypeReference<Map<String, Map<String, T>>>() {
-                    });
+                    return mapper.readValue(content,
+                            new TypeReference<Map<ChunkCoordinates, Map<BlockChunkCoordinates, T>>>(){});
                 } catch (JsonProcessingException e) {
                     throw new CompletionException(e);
                 }
@@ -305,7 +355,7 @@ public class BlockMetadataStorage<T extends Serializable> {
      * @return The number of bytes that were written to disk.
      */
     private CompletableFuture<Void> writeRegionData(
-            @NonNull Path regionFile, Map<String, Map<String, T>> data) {
+            @NonNull Path regionFile, Map<ChunkCoordinates, Map<BlockChunkCoordinates, T>> data) {
         // remove old file to overwrite
         return CompletableFuture.supplyAsync(() -> {
             try {
@@ -354,9 +404,10 @@ public class BlockMetadataStorage<T extends Serializable> {
     /**
      * Unloads chunk metadata from memory.
      * @param chunkInfo Information about the chunk.
+     * @param unload Whether the chunk should be unloaded from memory.
      */
-    public CompletableFuture<Void> unloadChunk(@NonNull ChunkInfo chunkInfo) {
-        // dont unload if chunk not loaded
+    public CompletableFuture<Void> saveChunk(@NonNull ChunkInfo chunkInfo, boolean unload) {
+        // don't save if chunk not loaded
         String regionKey = getRegionKey(chunkInfo);
         if (!regions.containsKey(regionKey)) {
             return CompletableFuture.completedFuture(null);
@@ -367,20 +418,34 @@ public class BlockMetadataStorage<T extends Serializable> {
 
         // remove active chunk from region
         return region.getLoadFuture()
-            .thenApply(c -> region.removeActiveChunk(chunkInfo.getCoordinates()))
+            .thenApply(unload
+                    ? c -> region.removeActiveChunk(chunkInfo.getCoordinates())
+                    : c -> region.getActiveChunks().size())
             .thenCompose((activeChunks) -> activeChunks == 0
-                    ? saveRegion(regions.get(getRegionKey(chunkInfo)))
+                    ? saveRegion(regions.get(getRegionKey(chunkInfo)), unload)
                     : CompletableFuture.completedFuture(null));
     }
 
     /**
-     * Persists metadata of specified chunks on disk.
-     * @param chunks Chunks to persist metadata for.
+     * Unload metadata of specified chunks and store it on disk.
+     * @param chunks Chunks to unload metadata for.
      */
     public CompletableFuture<Void> unloadChunks(ChunkInfo... chunks) {
         CompletableFuture<Void>[] tasks = new CompletableFuture[chunks.length];
         for (int i = 0; i < chunks.length; i++) {
-            tasks[i] = unloadChunk(chunks[i]);
+            tasks[i] = saveChunk(chunks[i], true);
+        }
+        return CompletableFuture.allOf(tasks);
+    }
+
+    /**
+     * Save metadata of specified chunks on disk.
+     * @param chunks Chunks to save metadata for.
+     */
+    public CompletableFuture<Void> saveChunks(ChunkInfo... chunks) {
+        CompletableFuture<Void>[] tasks = new CompletableFuture[chunks.length];
+        for (int i = 0; i < chunks.length; i++) {
+            tasks[i] = saveChunk(chunks[i], false);
         }
         return CompletableFuture.allOf(tasks);
     }
@@ -418,7 +483,7 @@ public class BlockMetadataStorage<T extends Serializable> {
 
     /**
      * Checks whether the specified chunk is dirty.
-     * A chunk is dirty if it has been modified since is was loaded into memory.
+     * A chunk is dirty if it has been modified since it was loaded into memory.
      * @param chunkInfo Information about the chunk.
      * @return Whether the chunk is dirty.
      */
@@ -432,7 +497,7 @@ public class BlockMetadataStorage<T extends Serializable> {
      * @param regionPath Path to the region file.
      * @param executorService Executor service to use.
      */
-    private CompletableFuture<Map<String, Map<String, T>>> loadRegion(
+    private CompletableFuture<Map<ChunkCoordinates, Map<BlockChunkCoordinates, T>>> loadRegion(
             @NonNull Path regionPath, @NonNull ExecutorService executorService) {
         return CompletableFuture.supplyAsync(() -> regionPath, executorService)
             // read region file
@@ -445,19 +510,23 @@ public class BlockMetadataStorage<T extends Serializable> {
     }
 
     /**
-     * Saves region metadata on disk and unloads the metadata from memory.
+     * Saves region metadata on disk.
+     * Unloads the region from memory if specified.
      * @param region The region to save.
+     * @param unload Whether the region metadata should be unloaded.
      */
-    public CompletableFuture<Void> saveRegion(@NonNull Region region) {
+    public CompletableFuture<Void> saveRegion(@NonNull Region region, boolean unload) {
         // check if chunk is already being persisted
-        if (region.getSaveFuture() != null) {
+        if (region.getSaveFuture() != null && !region.getSaveFuture().isDone()) {
             return region.getSaveFuture();
         }
 
         // ensure region is dirty
         if (!region.isDirty()) {
             // not dirty, nothing to save to disk
-            regions.remove(region.getKey());
+            if (unload) {
+                regions.remove(region.getKey());
+            }
             region.setSaveFuture(region.getLoadFuture());
             return region.getSaveFuture();
         }
@@ -465,7 +534,16 @@ public class BlockMetadataStorage<T extends Serializable> {
         // save region asynchronously
         CompletableFuture<Void> saveFuture = region.getLoadFuture()
                 .thenCompose((s) -> writeRegionData(region.getFilePath(), region.getBuffer()))
-                .thenRun(() -> regions.remove(region.getKey()));
+                .thenRun(unload ? () -> {
+                    // remove region from memory
+                    Region r = regions.remove(region.getKey());
+
+                    // run unload event
+                    Bukkit.getPluginManager().callEvent(new RegionUnloadEvent(
+                            r.getWorld(),
+                            r.getBuffer().keySet()
+                    ));
+                } : () -> {});
         region.setSaveFuture(saveFuture);
         return region.getSaveFuture();
     }
@@ -510,40 +588,6 @@ public class BlockMetadataStorage<T extends Serializable> {
     }
 
     /**
-     * Gets a key unique for a block in a chunk.
-     * @param block The block for which to get the key.
-     * @return The key.
-     */
-    public static String getBlockKeyInChunk(@NonNull Block block) {
-        Chunk chunk = block.getChunk();
-        return getBlockKeyInChunk(
-                block.getX() - chunk.getX() * 16,
-                block.getY(),
-                block.getZ() - chunk.getZ() * 16);
-    }
-
-    /**
-     * Gets a key unique for a block in a chunk.
-     * @param x X coordinate of the block relative to the chunk.
-     * @param y Y coordinate of the block.
-     * @param z Z coordinate of the block relative to the chunk.
-     * @return The key.
-     */
-    public static String getBlockKeyInChunk(int x, int y, int z) {
-        return x + "," + y + "," + z;
-    }
-
-    /**
-     * Get a key unique to a chunk within a metadata region file.
-     * @param coordinates Coordinates of the chunk.
-     * @return The chunk key.
-     */
-    private static String getChunkKey(@NonNull ChunkCoordinates coordinates) {
-        return coordinates.getX() + "," + coordinates.getZ();
-    }
-
-
-    /**
      * Represents a metadata task on a region.
      */
     @Data
@@ -553,13 +597,17 @@ public class BlockMetadataStorage<T extends Serializable> {
          */
         private final String key;
         /**
+         * World in which the region is located.
+         */
+        private final String world;
+        /**
          * Region file path.
          */
         private final Path filePath;
         /**
          * Currently active chunks in this region.
          */
-        private final Set<String> activeChunks = new HashSet<>();
+        private final Set<ChunkCoordinates> activeChunks = new HashSet<>();
 
         /**
          * Future loading the current region.
@@ -572,7 +620,7 @@ public class BlockMetadataStorage<T extends Serializable> {
         /**
          * The buffer of this region.
          */
-        private Map<String, Map<String, T>> buffer;
+        private Map<ChunkCoordinates, Map<BlockChunkCoordinates, T>> buffer;
         /**
          * Whether the metadata for this region has been modified.
          */
@@ -584,7 +632,7 @@ public class BlockMetadataStorage<T extends Serializable> {
          * @return The number of active chunks.
          */
         public int addActiveChunk(@NonNull ChunkCoordinates coordinates) {
-            activeChunks.add(getChunkKey(coordinates));
+            activeChunks.add(coordinates);
             return activeChunks.size();
         }
 
@@ -594,7 +642,7 @@ public class BlockMetadataStorage<T extends Serializable> {
          * @return The number of active chunks.
          */
         public int removeActiveChunk(@NonNull ChunkCoordinates coordinates) {
-            activeChunks.remove(getChunkKey(coordinates));
+            activeChunks.remove(coordinates);
             return activeChunks.size();
         }
     }

@@ -1,4 +1,4 @@
-package me.matoosh.blockmetadata.event;
+package me.matoosh.blockmetadata.listener;
 
 import lombok.RequiredArgsConstructor;
 import me.matoosh.blockmetadata.BlockMetadataStorage;

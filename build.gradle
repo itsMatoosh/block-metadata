@@ -4,7 +4,7 @@ plugins {
 }
 
 group 'me.matoosh'
-version '1.5.3'
+version '1.6.0'
 
 sourceCompatibility = JavaVersion.VERSION_1_8
 
@@ -32,7 +32,7 @@ dependencies {
     compileOnly 'org.projectlombok:lombok:1.18.22'
     annotationProcessor 'org.projectlombok:lombok:1.18.22'
 
-    testCompileOnly 'org.projectlombok:lombok:1.18.20'
+    testCompileOnly 'org.projectlombok:lombok:1.18.22'
     testAnnotationProcessor 'org.projectlombok:lombok:1.18.22'
 
     // junit

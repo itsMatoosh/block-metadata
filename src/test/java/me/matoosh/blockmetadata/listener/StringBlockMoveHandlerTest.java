@@ -1,4 +1,4 @@
-package me.matoosh.blockmetadata.event;
+package me.matoosh.blockmetadata.listener;
 
 public class StringBlockMoveHandlerTest extends BlockMoveHandlerTest<String> {
     /**

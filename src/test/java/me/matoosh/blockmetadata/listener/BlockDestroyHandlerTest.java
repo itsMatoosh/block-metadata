@@ -1,4 +1,4 @@
-package me.matoosh.blockmetadata.event;
+package me.matoosh.blockmetadata.listener;
 
 import be.seeseemelk.mockbukkit.MockBukkit;
 import be.seeseemelk.mockbukkit.ServerMock;

@@ -1,12 +1,12 @@
-package me.matoosh.blockmetadata;
+package me.matoosh.blockmetadata.entity.chunkinfo;
 
-import lombok.Data;
+import lombok.Value;
 import org.bukkit.Chunk;
 
-@Data
+@Value
 public class ChunkInfo {
-    private final String world;
-    private final ChunkCoordinates coordinates;
+    String world;
+    ChunkCoordinates coordinates;
 
     public static ChunkInfo fromChunk(Chunk chunk) {
         return new ChunkInfo(chunk.getWorld().getName(),

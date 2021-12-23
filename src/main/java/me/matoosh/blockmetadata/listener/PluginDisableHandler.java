@@ -1,17 +1,16 @@
-package me.matoosh.blockmetadata.event;
+package me.matoosh.blockmetadata.listener;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.java.Log;
 import me.matoosh.blockmetadata.BlockMetadataStorage;
-import me.matoosh.blockmetadata.ChunkInfo;
+import me.matoosh.blockmetadata.entity.chunkinfo.ChunkInfo;
 import org.bukkit.Bukkit;
-import org.bukkit.Chunk;
-import org.bukkit.World;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.server.PluginDisableEvent;
 
 import java.io.Serializable;
+import java.util.Arrays;
 import java.util.concurrent.ExecutionException;
 
 /**
@@ -27,13 +26,10 @@ public class PluginDisableHandler<T extends Serializable> implements Listener {
     @EventHandler
     public void onServerStop(PluginDisableEvent event)
             throws ExecutionException, InterruptedException {
-        // force unload each chunk
-        for (World world : Bukkit.getWorlds()) {
-            for (Chunk chunk : world.getLoadedChunks()) {
-                storage.unloadChunk(ChunkInfo.fromChunk(chunk)).get();
-            }
-        }
-
-        log.info("Block metadata saved successfully!");
+        // unload each loaded chunk in the saved world
+        storage.unloadChunks(Bukkit.getWorlds().stream()
+                .flatMap(w -> Arrays.stream(w.getLoadedChunks()))
+                .map(ChunkInfo::fromChunk)
+                .toArray(ChunkInfo[]::new)).get();
     }
 }

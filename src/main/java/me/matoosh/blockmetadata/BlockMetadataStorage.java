@@ -271,16 +271,16 @@ public class BlockMetadataStorage<T extends Serializable> {
         String regionKey = getRegionKey(chunkInfo);
         Region region = regions.get(regionKey);
         if (region == null) {
-            // buffer region
+            // create region object
             Path regionPath = getRegionFile(chunkInfo);
             Region newRegion = new Region(regionKey, chunkInfo.getWorld(), regionPath);
-            regions.put(newRegion.getKey(), newRegion);
 
             // load region
             ExecutorService regionExeService = Executors.newSingleThreadExecutor();
             CompletableFuture<Void> loadFuture = loadRegion(newRegion.getFilePath(), regionExeService)
                     .thenAccept(newRegion::setBuffer);
             newRegion.setLoadFuture(loadFuture);
+            regions.put(newRegion.getKey(), newRegion);
 
             // wait until region loads
             return newRegion.getLoadFuture().thenApply((d) -> newRegion);
